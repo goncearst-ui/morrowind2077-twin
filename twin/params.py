@@ -37,7 +37,7 @@ class Params:
     region_start: float = 60.0                     # [предл]
     region_max: float = 100.0                      # [док 06] шкала 0–100
     region_recovery: float = 1.5                   # [док 06]
-    toll_drag: float = 0.05                        # [док 06]
+    toll_drag: float = 0.005                       # решение Стана 2026-10-25 (отчёт 01, №2); в 06 записано 0.05 — противоречит тексту 06
     raid_yield: float = 4.0                        # [док 06]
     raid_cost: float = 8.0                         # [док 06]
     raid_cooldown: int = 5                         # [док 06] «~5 суток»
