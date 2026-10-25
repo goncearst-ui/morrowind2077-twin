@@ -1,13 +1,14 @@
 """Чек-лист приёмки: spec 00 §6 + spec 01 §2. Меняет только Стан (гейт protect-tests).
 2026-10-25: пометка «ожидаемо красный» с DS4 снята по утверждённому plan 01, шаг 5; добавлен RG1.
-2026-10-25: добавлены RG2–RG5 и обратная проверка R3 по утверждённому plan 03a, шаг 3. Пометка DS4 не менялась."""
+2026-10-25: добавлены RG2–RG5 и обратная проверка R3 по утверждённому plan 03a, шаг 3. Пометка DS4 не менялась.
+2026-10-25: добавлены OB1, RG6 и обратная проверка R4 по утверждённому plan 03b, шаг 4. OB2 в чек-лист не добавлен: красный по критерию из spec 03b, решает Стан (отчёт 03b)."""
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "RG6")  # OB2 — красный, решение Стана ждёт (отчёт 03b)
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -17,7 +18,7 @@ KNOWN_DEFECT = pytest.mark.xfail(
            "Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
 
 
-@pytest.mark.parametrize("sc", ["DS1", "DS2", pytest.param("DS4", marks=KNOWN_DEFECT), "RG1", "RG2", "RG3", "RG4", "RG5"])
+@pytest.mark.parametrize("sc", ["DS1", "DS2", pytest.param("DS4", marks=KNOWN_DEFECT), "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "RG6"])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]

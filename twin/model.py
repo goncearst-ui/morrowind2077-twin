@@ -9,6 +9,7 @@ from math import floor
 from .params import Params
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
+CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
 
 @dataclass
@@ -19,6 +20,7 @@ class Site:
     min_crew: int
     owner: str | None = None
     income_disabled: bool = False  # сценарий «потеря узла»
+    region: str = "common"         # регион, где стоит объект (spec 03b)
 
 
 @dataclass
@@ -39,6 +41,8 @@ class Faction:
     last_assault: int = -10**6
     last_raid: int = -10**6
     workers: dict = field(default_factory=dict)  # объект -> работников сверх MinCrew (spec 03a)
+    home: str = "common"            # родной регион: налёты бьют по нему (spec 03b)
+    depot: str | None = None        # адрес пула: имя объекта или CACHE (spec 03b)
 
     @property
     def manpower(self) -> int:
@@ -61,16 +65,26 @@ class World:
     events: list = field(default_factory=list)   # события для метрик (штурмы, дезертирство, сдача)
     forced_assaults: dict = field(default_factory=dict)  # tick -> [(attacker, site_name)]
     scheduled: dict = field(default_factory=dict)        # tick -> [callable(world)]
-    prosperity: float | None = None                      # TF_RegionProsperity (06), один регион
+    regions: dict = field(default_factory=dict)          # имя региона -> Достаток (06); "common" — один регион на всех
+
+    @property
+    def prosperity(self) -> float:
+        return self.regions["common"]
 
     def __post_init__(self):
-        if self.prosperity is None:
-            self.prosperity = self.p.region_start
+        if not self.regions:
+            self.regions = {"common": self.p.region_start}
+        for name in [f.home for f in self.factions.values()] + [s.region for s in self.sites]:
+            self.regions.setdefault(name, self.p.region_start)
+        for f in self.factions.values():
+            if f.depot is None:
+                f.depot = self.best_depot(f)
 
-    def set_region(self, value, phase, reason):
-        old = self.prosperity
-        self.prosperity = max(0.0, min(self.p.region_max, value))
-        self.rec(phase, "06", "region.prosperity", old, self.prosperity, reason)
+    def set_region(self, name, value, phase, reason):
+        old = self.regions[name]
+        self.regions[name] = max(0.0, min(self.p.region_max, value))
+        target = "region.prosperity" if name == "common" else f"region.{name}.prosperity"
+        self.rec(phase, "06", target, old, self.regions[name], reason)
 
     # ---------- журнал ----------
     def rec(self, phase, module, target, old, new, reason):
@@ -118,16 +132,41 @@ class World:
     def owned(self, f: Faction):
         return [s for s in self.sites if s.owner == f.name]
 
-    def staffed(self, f: Faction):
+    def staffed(self, f: Faction, exclude: str | None = None):
         """Какие площадки укомплектованы. Трактовка v0: люди распределяются
-        по площадкам в порядке убывания дохода, каждой нужно MinCrew."""
+        по площадкам в порядке убывания дохода, каждой нужно MinCrew.
+        exclude — объект, которого уже нет у фракции (расчёт переезда склада)."""
         left = f.manpower
         out = []
-        for s in sorted(self.owned(f), key=lambda s: -s.yield_):
+        for s in sorted([s for s in self.owned(f) if s.name != exclude], key=lambda s: -s.yield_):
             if left >= s.min_crew:
                 out.append(s)
                 left -= s.min_crew
         return out
+
+    # ---------- 06: склад (spec 03b) ----------
+    def best_depot(self, f: Faction, exclude: str | None = None) -> str:
+        """Склад — на укомплектованном объекте с наибольшим доходом, при равенстве по имени;
+        нет такого — в тайник (трактовка 06 «ближайшая укомплектованная»: расстояний в двойнике нет)."""
+        st = sorted(self.staffed(f, exclude), key=lambda s: (-s.yield_, s.name))
+        return st[0].name if st else CACHE
+
+    def move_depot(self, f: Faction, reason: str, exclude: str | None = None):
+        new = self.best_depot(f, exclude)
+        old = f.depot
+        if new != old:
+            f.depot = new
+            self.rec(7, "06", f"{f.name}.depot", old, new, "DEPOT_MOVE")
+            self.events.append(dict(tick=self.tick, kind="depot_move", faction=f.name, frm=old, to=new, why=reason))
+
+    def depot_strike(self, f: Faction, site: Site):
+        p = self.p
+        before = (f.supply, f.armory)
+        self.setf(f, "supply", f.supply * (1 - p.depot_loss_rate), 7, "06", "DEPOT_STRIKE")
+        self.setf(f, "armory", f.armory * (1 - p.depot_armory_rate), 7, "06", "DEPOT_STRIKE")
+        self.events.append(dict(tick=self.tick, kind="depot_strike", faction=f.name, site=site.name,
+                                supply_before=before[0], armory_before=before[1]))
+        self.move_depot(f, "DEPOT_STRIKE", exclude=site.name)
 
     def work_plan(self, f: Faction):
         """Spec 03a: сначала каждому укомплектованному объекту MinCrew, остаток —
@@ -164,7 +203,8 @@ class World:
         # фаза 1 — затухание шока, восстановление региона
         for f in fs:
             self.setf(f, "shock", max(0.0, f.shock - self.p.shock_decay_per_tick), 1, "04", "DECAY")
-        self.set_region(self.prosperity + self.p.region_recovery, 1, "REGION_RECOVERY")
+        for name in list(self.regions):
+            self.set_region(name, self.regions[name] + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
         for f in fs:
             plan = self.work_plan(f)
@@ -177,7 +217,7 @@ class World:
             paying = [(s, inc) for s, _, inc in plan if not s.income_disabled]
             income = sum(inc for _, inc in paying)
             for s, inc in paying:
-                self.set_region(self.prosperity - inc * self.p.toll_drag, 2, "TOLL_DRAG")
+                self.set_region(s.region, self.regions[s.region] - inc * self.p.toll_drag, 2, "TOLL_DRAG")
             new = max(0.0, f.supply + income - self.expense(f))
             self.setf(f, "supply", new, 2, "06", "UPKEEP")
         # фаза 3 — голод и дезертирство (читает DaysOfSupply прошлого тика)
@@ -204,10 +244,10 @@ class World:
         if self.tick - f.last_raid < p.raid_cooldown:
             return
         f.last_raid = self.tick
-        loot = self.prosperity * p.raid_yield
+        loot = self.regions[f.home] * p.raid_yield
         to_pool = loot * (1 - p.share_rate[f.archetype])
         self.setf(f, "supply", f.supply + to_pool, 7, "06", "RAID")
-        self.set_region(self.prosperity - p.raid_cost, 7, "RAID")
+        self.set_region(f.home, self.regions[f.home] - p.raid_cost, 7, "RAID")
         self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
                                 to_pool=to_pool, manpower=f.manpower))
 
@@ -249,6 +289,8 @@ class World:
         if cheap.base_cost >= dear.base_cost:
             return
         dear.owner, cheap.owner = None, f.name
+        if f.depot == dear.name:
+            self.move_depot(f, "SURRENDER")
         self.rec(7, "06", f"site.{dear.name}.owner", f.name, None, "SURRENDER")
         self.rec(7, "06", f"site.{cheap.name}.owner", None, f.name, "SURRENDER")
         self.events.append(dict(tick=self.tick, kind="surrender", faction=f.name,
@@ -305,6 +347,9 @@ class World:
         sh = {}
         for f, k in ((lose, kl), (win, kw)):
             sh[f.name] = self.add_personnel_shock(f, k, mp_before[f.name], 1.0, 7, "ASSAULT")
+        # удар по складу (06): только при победе атакующего и только если на объекте стоял склад; до трофея
+        if attacker_wins and d.depot == s.name:
+            self.depot_strike(d, s)
         # трофей (06)
         moved_supply = lose.supply * p.trophy_rate
         self.setf(lose, "supply", lose.supply - moved_supply, 7, "06", "TROPHY")

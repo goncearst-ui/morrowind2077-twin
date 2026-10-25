@@ -26,7 +26,7 @@ class Params:
         "Хранители": 0.8, "Хищники": 1.15, "Контролёры": 1.0, "Дрейфующие": 1.0})  # [док 06]
     worker_yield: float = 4.0                      # доход за работника сверх MinCrew, до потолка объекта [предл], утверждено 2026-10-25 (spec 03a)
     crew_cap: dict = field(default_factory=lambda: {
-        "Перевал": 40, "Насосная": 15})            # потолок работников на объекте [предл], утверждено 2026-10-25 (spec 03a)
+        "Перевал": 40, "Насосная": 15, "Жила": 20})            # потолок работников на объекте [предл], утверждено 2026-10-25 (spec 03a; «Жила» — spec 03b)
     hunger_threshold: float = 10.0                 # [док 06]
     desertion_cost: float = 30.0                   # [док 06]
     morale_hunger_k: float = 0.3                   # [док 06]
@@ -46,6 +46,8 @@ class Params:
     raid_cooldown: int = 5                         # [док 06] «~5 суток»
     share_rate: dict = field(default_factory=lambda: {
         "Хищники": 0.35, "Контролёры": 0.10, "Хранители": 0.0, "Дрейфующие": 0.0})  # [док 06]
+    depot_loss_rate: float = 0.30                  # DepotLossRate: часть запаса, уничтоженная при ударе по складу [док 06]
+    depot_armory_rate: float = 0.25                # DepotArmoryRate [док 06]
     raiding_archetypes: tuple = ("Хищники",)       # [док 06]
     raids_enabled: bool = True
 

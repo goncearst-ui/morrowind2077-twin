@@ -1,7 +1,7 @@
 """Прогон набора «штопор» v0 и вывод результатов: python3 run.py"""
 from twin.scenarios import REVERSE, evaluate
 
-for sc in ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5"):
+for sc in ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6"):
     ok, res, m, w, s = evaluate(sc)
     print(f"{sc}: {'ЗЕЛЁНЫЙ' if ok else 'КРАСНЫЙ'}")
     for name, k, det in res:

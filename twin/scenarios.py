@@ -5,7 +5,7 @@
 """
 from dataclasses import replace
 
-from .model import Faction, Site, World
+from .model import CACHE, Faction, Site, World
 from .params import Params
 
 
@@ -17,6 +17,11 @@ def split(n):
 
 def sites():
     return [Site("Перевал", 40, 90, 4), Site("Насосная", 15, 35, 2)]
+
+
+def sites3():
+    """Три объекта: третий — «Жила» (06: КоштБазы 20; доход 60, MinCrew 3 — [предл], spec 03b)."""
+    return sites() + [Site("Жила", 20, 60, 3)]
 
 
 def faction(world_p, name, arche, n, dos, site_cost):
@@ -60,6 +65,27 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         # один клан Хищников 30 чел. без площадки, 200 тиков (spec 01)
         a = faction(p, "A", "Хищники", 30, 20, 0)
         w = World({"A": a}, ss, p)
+        horizon = 200
+    elif sc in ("OB1", "OB2"):
+        # spec 03b: A (Хищники 90) принудительно штурмует Перевал Хранителей B на тике 5.
+        # OB1: у B два объекта (Перевал со складом, Насосная), у A — «Жила». OB2: у B один объект.
+        ss = sites3()
+        two = sc == "OB1"
+        ss[0].owner = "B"
+        if two:
+            ss[1].owner = "B"
+        ss[2].owner = "A"
+        b = faction(p, "B", "Хранители", 40 if two else 30, 20, sum(x.base_cost for x in ss if x.owner == "B"))
+        a = faction(p, "A", "Хищники", 90, 20, ss[2].base_cost)
+        w = World({"A": a, "B": b}, ss, p)
+        w.forced_assaults = {5: [("A", "Перевал")]}
+        horizon = 55
+    elif sc == "RG6":
+        # spec 03b: два Хищника без объектов, каждый в своём родном регионе
+        a = faction(p, "A", "Хищники", 30, 20, 0)
+        b = faction(p, "B", "Хищники", 30, 20, 0)
+        a.home, b.home = "RA", "RB"
+        w = World({"A": a, "B": b}, sites(), p)
         horizon = 200
     elif sc in SOLO:
         # spec 03a: одна фракция, без войны, 200 тиков; запас на 20 суток
@@ -148,7 +174,7 @@ def check(sc: str, w: World, series):
         res.append(("сценарий валиден: был хотя бы 1 штурм", m["_assaults"] >= 1, f"штурмов: {m['_assaults']}"))
     elif sc == "RG1":
         raids = [e for e in w.events if e["kind"] == "raid"]
-        end_p = w.prosperity
+        end_p = w.regions[w.factions["A"].home]
         res.append(("угодья выедаются: Достаток на тике 200 ниже стартового", end_p < p.region_start,
                     f"Достаток {p.region_start:.0f} → {end_p:.1f}"))
         ok = len(raids) >= 10
@@ -156,6 +182,47 @@ def check(sc: str, w: World, series):
         last = sum(e["loot"] for e in raids[-5:]) / 5 if ok else 0
         res.append(("добыча падает: последние 5 налётов беднее первых 5", ok and last < first,
                     f"налётов {len(raids)}; средняя добыча первых 5 — {first:.0f}, последних 5 — {last:.0f}"))
+    elif sc in ("OB1", "OB2"):
+        st = [e for e in w.events if e["kind"] == "depot_strike"]
+        ok_strike = len(st) == 1 and st[0]["faction"] == "B" and st[0]["site"] == "Перевал"
+        res.append(("удар по складу B при захвате Перевала", ok_strike, f"ударов по складу: {len(st)}"))
+        if ok_strike:
+            e = st[0]
+            rows = {r[3]: r for r in w.log if r[6] == "DEPOT_STRIKE" and r[0] == e["tick"]}
+            sup, arm = rows.get("B.supply"), rows.get("B.armory")
+            if sup is None:
+                res.append(("запас после удара = (1 − DepotLossRate) × до", False, "запас B при ударе не изменился"))
+            else:
+                res.append(("запас после удара = (1 − DepotLossRate) × до", abs(sup[5] - sup[4] * (1 - p.depot_loss_rate)) < 1e-3 and sup[4] > 0,
+                            f"запас B {sup[4]:.0f} → {sup[5]:.0f}, доля потери {1 - sup[5] / sup[4]:.0%}, ожидалось {p.depot_loss_rate:.0%}"))
+            if arm is None:
+                res.append(("снаряжение после удара = (1 − DepotArmoryRate) × до", False, "снаряжение B при ударе не изменилось"))
+            else:
+                res.append(("снаряжение после удара = (1 − DepotArmoryRate) × до", abs(arm[5] - arm[4] * (1 - p.depot_armory_rate)) < 1e-3,
+                            f"снаряжение B {arm[4]:.1f} → {arm[5]:.1f}"))
+            mv = [r for r in w.log if r[6] == "DEPOT_MOVE" and r[3] == "B.depot"]
+            want = "Насосная" if sc == "OB1" else CACHE
+            res.append((f"склад переехал: {want}", len(mv) == 1 and mv[0][5] == want and mv[0][1] == 7 and mv[0][0] == e["tick"],
+                        f"переездов: {len(mv)}" + (f", {mv[0][4]} → {mv[0][5]}" if mv else "")))
+            idx = {r[6]: i for i, r in enumerate(w.log) if r[0] == e["tick"] and r[6] in ("DEPOT_STRIKE", "DEPOT_MOVE", "TROPHY")}
+            res.append(("порядок: удар и переезд до трофея", idx.get("DEPOT_MOVE", 9e9) < idx.get("TROPHY", -1) and idx.get("DEPOT_STRIKE", 9e9) < idx.get("TROPHY", -1),
+                        "строки журнала DEPOT_STRIKE, DEPOT_MOVE, затем TROPHY"))
+        bser = dict(series["B"])
+        if sc == "OB1":
+            res.append(("B жива спустя 50 тиков после удара", bser[55] > 0, f"B на тике 55: {bser[55]} чел."))
+        else:
+            t0 = st[0]["tick"] if st else 0
+            early = [(e["tick"], e["n"]) for e in w.events if e["kind"] == "desertion" and e["faction"] == "B" and e["tick"] <= t0 + 20]
+            res.append(("люди B не дезертируют от голода в первые 20 тиков после удара (spec 03b, OB2)", not early,
+                        f"удар на тике {t0}; дезертирство B в окне: " + (f"первое на тике {early[0][0]}" if early else "нет")))
+    elif sc == "RG6":
+        base, _ = run("RG1")
+        solo_end = base.regions["common"]
+        ra, rb = w.regions["RA"], w.regions["RB"]
+        res.append(("налёты A не меняют регион B (Достаток как у одиночки)", abs(rb - solo_end) < 1e-6 and abs(ra - solo_end) < 1e-6,
+                    f"Достаток RA {ra:.1f}, RB {rb:.1f}, одиночка (RG1) {solo_end:.1f}"))
+        raids = [e for e in w.events if e["kind"] == "raid"]
+        res.append(("грабили обе фракции", {e["faction"] for e in raids} == {"A", "B"}, f"налётов: {len(raids)}"))
     elif sc in SOLO:
         a, f = m["A"], w.factions["A"]
         if sc in ("RG2", "RG3"):
@@ -180,4 +247,5 @@ REVERSE = {
     "R1": (replace(Params(), old_loss_formula=True), ("DS1", "DS4"), "старая формула потерь 13 (половина всей фракции)"),
     "R2": (replace(Params(), desertion_cap_per_tick=None), ("DS2",), "без потолка дезертирства за тик"),
     "R3": (replace(Params(), worker_yield=0.0), ("RG2",), "доход за работника 0 (как до 03a)"),
+    "R4": (replace(Params(), depot_loss_rate=0.0), ("OB1",), "удар по складу ничего не уничтожает (DepotLossRate 0)"),
 }
