@@ -26,6 +26,14 @@ def faction(world_p, name, arche, n, dos, site_cost):
     return f
 
 
+SOLO = {  # spec 03a: (уклад, численность, объекты)
+    "RG2": ("Контролёры", 60, ("Перевал",)),
+    "RG3": ("Хранители", 100, ("Перевал", "Насосная")),
+    "RG4": ("Контролёры", 100, ("Перевал", "Насосная")),
+    "RG5": ("Хранители", 30, ()),
+}
+
+
 def build(sc: str, p: Params) -> tuple[World, int]:
     ss = sites()
     if sc == "DS1":
@@ -51,6 +59,16 @@ def build(sc: str, p: Params) -> tuple[World, int]:
     elif sc == "RG1":
         # один клан Хищников 30 чел. без площадки, 200 тиков (spec 01)
         a = faction(p, "A", "Хищники", 30, 20, 0)
+        w = World({"A": a}, ss, p)
+        horizon = 200
+    elif sc in SOLO:
+        # spec 03a: одна фракция, без войны, 200 тиков; запас на 20 суток
+        arche, n, names = SOLO[sc]
+        ss = sites()
+        for x in ss:
+            if x.name in names:
+                x.owner = "A"
+        a = faction(p, "A", arche, n, 20, sum(x.base_cost for x in ss if x.name in names))
         w = World({"A": a}, ss, p)
         horizon = 200
     else:
@@ -138,6 +156,17 @@ def check(sc: str, w: World, series):
         last = sum(e["loot"] for e in raids[-5:]) / 5 if ok else 0
         res.append(("добыча падает: последние 5 налётов беднее первых 5", ok and last < first,
                     f"налётов {len(raids)}; средняя добыча первых 5 — {first:.0f}, последних 5 — {last:.0f}"))
+    elif sc in SOLO:
+        a, f = m["A"], w.factions["A"]
+        if sc in ("RG2", "RG3"):
+            res.append(("нет дезертиров при ёмкости объекта", a["deserted"] == 0, f"дезертировало {a['deserted']}, в конце {a['end']} чел."))
+        if sc == "RG2":
+            res.append(("запас на тике 200 не ниже порога голода", f.days_supply >= p.hunger_threshold,
+                        f"запас {f.days_supply:.1f} суток, порог {p.hunger_threshold:.0f}"))
+        if sc == "RG4":
+            res.append(("худеют до ёмкости, но не ниже (80–90 чел.)", 80 <= a["end"] <= 90, f"в конце {a['end']} чел."))
+        if sc == "RG5":
+            res.append(("голод не отменён: без объектов фракция тает", a["end"] < a["start"], f"{a['start']} → {a['end']} чел."))
     return res, m
 
 
@@ -150,4 +179,5 @@ def evaluate(sc: str, p: Params | None = None):
 REVERSE = {
     "R1": (replace(Params(), old_loss_formula=True), ("DS1", "DS4"), "старая формула потерь 13 (половина всей фракции)"),
     "R2": (replace(Params(), desertion_cap_per_tick=None), ("DS2",), "без потолка дезертирства за тик"),
+    "R3": (replace(Params(), worker_yield=0.0), ("RG2",), "доход за работника 0 (как до 03a)"),
 }

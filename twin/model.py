@@ -38,6 +38,7 @@ class Faction:
     days_supply: float = 0.0       # публикуемая производная (фаза 4)
     last_assault: int = -10**6
     last_raid: int = -10**6
+    workers: dict = field(default_factory=dict)  # объект -> работников сверх MinCrew (spec 03a)
 
     @property
     def manpower(self) -> int:
@@ -128,6 +129,20 @@ class World:
                 left -= s.min_crew
         return out
 
+    def work_plan(self, f: Faction):
+        """Spec 03a: сначала каждому укомплектованному объекту MinCrew, остаток —
+        по объектам в порядке убывания базового дохода до потолка p.crew_cap.
+        Возвращает (объект, работников сверх MinCrew, доход объекта)."""
+        st = self.staffed(f)
+        left = f.manpower - sum(s.min_crew for s in st)
+        out = []
+        for s in st:
+            cap = self.p.crew_cap.get(s.name, s.min_crew)
+            extra = max(0, min(left, cap - s.min_crew))
+            left -= extra
+            out.append((s, extra, s.yield_ + self.p.worker_yield * extra))
+        return out
+
     def crew(self, f: Faction, site: Site) -> int:
         return min(f.manpower, site.min_crew + 2)
 
@@ -152,10 +167,17 @@ class World:
         self.set_region(self.prosperity + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
         for f in fs:
-            paying = [s for s in self.staffed(f) if not s.income_disabled]
-            income = sum(s.yield_ for s in paying)
-            for s in paying:
-                self.set_region(self.prosperity - s.yield_ * self.p.toll_drag, 2, "TOLL_DRAG")
+            plan = self.work_plan(f)
+            for s, extra, _ in plan:
+                old = f.workers.get(s.name, 0)
+                f.workers[s.name] = extra
+                self.rec(2, "06", f"{f.name}.workers.{s.name}", old, extra, "WORKERS")
+            for name in [n for n in f.workers if n not in {s.name for s, _, _ in plan}]:
+                self.rec(2, "06", f"{f.name}.workers.{name}", f.workers.pop(name), 0, "WORKERS")
+            paying = [(s, inc) for s, _, inc in plan if not s.income_disabled]
+            income = sum(inc for _, inc in paying)
+            for s, inc in paying:
+                self.set_region(self.prosperity - inc * self.p.toll_drag, 2, "TOLL_DRAG")
             new = max(0.0, f.supply + income - self.expense(f))
             self.setf(f, "supply", new, 2, "06", "UPKEEP")
         # фаза 3 — голод и дезертирство (читает DaysOfSupply прошлого тика)

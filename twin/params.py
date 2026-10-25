@@ -21,9 +21,12 @@ class Params:
     desertion_shock_weight: float = 0.5            # [док 04], переключатель 0 / 0.5
 
     # --- 06 экономика ---
-    per_head_cost: float = 8.0                     # Ставка [док 06]
+    per_head_cost: float = 3.0                     # Ставка: 3 порции в сутки, решение Стана 2026-10-25 (intent 03a); в 06 записано 8
     archetype_cost_mult: dict = field(default_factory=lambda: {
         "Хранители": 0.8, "Хищники": 1.15, "Контролёры": 1.0, "Дрейфующие": 1.0})  # [док 06]
+    worker_yield: float = 4.0                      # доход за работника сверх MinCrew, до потолка объекта [предл], утверждено 2026-10-25 (spec 03a)
+    crew_cap: dict = field(default_factory=lambda: {
+        "Перевал": 40, "Насосная": 15})            # потолок работников на объекте [предл], утверждено 2026-10-25 (spec 03a)
     hunger_threshold: float = 10.0                 # [док 06]
     desertion_cost: float = 30.0                   # [док 06]
     morale_hunger_k: float = 0.3                   # [док 06]
