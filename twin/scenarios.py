@@ -56,7 +56,7 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World({"A": a}, ss, p)
         w.scheduled = {1: [lambda w: setattr(w.site("Перевал"), "income_disabled", True)]}
         horizon = 100
-    elif sc == "DS4":
+    elif sc in ("DS4", "IC5"):
         a = faction(p, "A", "Хищники", 90, 20, 40)
         b = faction(p, "B", "Хищники", 30, 20, 15)
         ss[0].owner, ss[1].owner = "A", "B"
@@ -81,6 +81,18 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World({"A": a, "B": b}, ss, p)
         w.forced_assaults = {5: [("A", "Перевал")]}
         horizon = 55
+    elif sc in ("IC1", "IC2"):
+        # spec 06: Дрейфующие 30 без объектов, 200 тиков (контрабанда: потолок рынка, Heat)
+        a = faction(p, "A", "Дрейфующие", 30, 20, 0)
+        w = World({"A": a}, ss, p)
+        horizon = 200
+    elif sc == "IC3":
+        # spec 06: Хранители и Контролёры без объектов, у каждого свой родной регион — каналы им закрыты
+        a = faction(p, "A", "Хранители", 30, 20, 0)
+        b = faction(p, "B", "Контролёры", 30, 20, 0)
+        a.home, b.home = "RA", "RB"
+        w = World({"A": a, "B": b}, ss, p)
+        horizon = 100
     elif sc == "HD1":
         # spec 05: Хищники 60 на Насосной, без войны, 100 тиков
         ss[1].owner = "A"
@@ -237,6 +249,52 @@ def check(sc: str, w: World, series):
                     f"Достаток RA {ra:.1f}, RB {rb:.1f}, одиночка (RG1) {solo_end:.1f}"))
         raids = [e for e in w.events if e["kind"] == "raid"]
         res.append(("грабили обе фракции", {e["faction"] for e in raids} == {"A", "B"}, f"налётов: {len(raids)}"))
+    elif sc in ("IC1", "IC2"):
+        rows = [r for r in w.log if r[6] == "SMUGGLING" and r[3] == "A.supply"]
+        mp = dict(series["A"])
+        cap0 = Params().market_cap   # потолок из спецификации, а не из проверяемых параметров (иначе R7 не заметит)
+        if sc == "IC1":
+            res.append(("сценарий валиден: контрабанда была", len(rows) > 0, f"сделок {len(rows)}"))
+            over = [r for r in rows if r[5] - r[4] > cap0 + 1e-6]
+            res.append(("доход за тик не выше потолка рынка", not over, f"макс. доход за тик {max([r[5] - r[4] for r in rows] or [0]):.1f}, потолок {cap0:.0f}"))
+            bad = [r for r in rows if abs((r[5] - r[4]) - min(p.smuggling_yield * min(mp[r[0] - 1], p.smuggling_cap_people), cap0)) > 1e-3]
+            res.append(("доход = ставка × занятые до потолка", not bad, f"расхождений {len(bad)} из {len(rows)}"))
+            few = [r for r in rows if mp[r[0] - 1] < 3]
+            res.append(("при нуле свободных людей дохода нет", not few, f"сделок при < 3 людях: {len(few)}"))
+        else:
+            busts = [e for e in w.events if e["kind"] == "bust"]
+            res.append(("сценарий валиден: был срыв", len(busts) > 0, f"срывов {len(busts)}"))
+            heat = [r for r in w.log if r[3] == "A.heat"]
+            inc_ticks = {r[0] for r in rows}
+            up_bad = [r for r in heat if r[5] > r[4] and not (r[6] == "SMUGGLING" and r[0] in inc_ticks)]
+            down_bad = [r for r in heat if r[5] < r[4] and r[6] not in ("HEAT_DECAY", "BUST")]
+            res.append(("Heat растёт только от дохода и спадает сам", not up_bad and not down_bad,
+                        f"нарушений роста {len(up_bad)}, спада {len(down_bad)}"))
+            bust_ticks = {e["tick"] for e in busts}
+            final = {}   # Heat к концу расчёта тика, до сброса срывом
+            for r in heat:
+                if r[6] != "BUST":
+                    final[r[0]] = r[5]
+            at_thr = {t for t, v in final.items() if v >= p.heat_threshold}
+            res.append(("срыв строго на пороге: тик с Heat ≥ порога — срыв, и наоборот",
+                        at_thr == bust_ticks, f"тиков на пороге {len(at_thr)}, срывов {len(bust_ticks)}"))
+            res.append(("срыв стоит людей: задержанные = сумма срывов", w.factions["A"].detained == sum(e["n"] for e in busts),
+                        f"задержано {w.factions['A'].detained}"))
+    elif sc == "IC3":
+        for n, kind in (("A", "SMUGGLING"), ("B", "SMUGGLING"), ("A", "PROTECTION_FEE"), ("B", "PROTECTION_FEE")):
+            got = [r for r in w.log if r[6] == kind and r[3].startswith(n + ".")]
+            who = "Хранители" if n == "A" else "Контролёры"
+            res.append((f"{who}: нет строк {kind}", not got, f"строк {len(got)}"))
+    elif sc == "IC5":
+        from dataclasses import replace as _r
+        base_p = _r(p, smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False)
+        wb, sb = run("DS4", base_p)
+        def death(s):
+            return next((t for t, mp in s if mp == 0), None)
+        d_base, d_with = death(sb["B"]), death(series["B"])
+        ok = d_base is not None and (d_with is None or d_with > d_base)
+        res.append(("B живёт дольше, чем без каналов", ok,
+                    f"без каналов B вымирает на тике {d_base}; с каналами: " + (f"на тике {d_with}" if d_with else f"жива, {series['B'][-1][1]} чел.")))
     elif sc in ("HD1", "HD2", "HD3"):
         f = w.factions["A"]
         exp_rows = [r for r in w.log if r[6] == "EXPEL" and r[3] == "A.expelled"]
@@ -286,5 +344,7 @@ REVERSE = {
     "R3": (replace(Params(), worker_yield=0.0), ("RG2",), "доход за работника 0 (как до 03a)"),
     "R4": (replace(Params(), depot_loss_rate=0.0), ("OB1",), "удар по складу ничего не уничтожает (DepotLossRate 0)"),
     "R5": (replace(Params(), decisions_enabled=False), ("HD1",), "решения при голоде выключены"),
+    "R7": (replace(Params(), market_cap=1e9), ("IC1",), "потолок внешнего рынка выключен"),
+    "R8": (replace(Params(), heat_per_income=0.0), ("IC2",), "Heat не растёт (внимание выключено)"),
     "R6": (replace(Params(), peaceful_decide=("Хищники", "Контролёры", "Хранители")), ("HD3",), "Хранители принимают решения как Хищники"),
 }

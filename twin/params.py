@@ -72,5 +72,27 @@ class Params:
     forced_morale_cost: float = 0.5                # мораль в тик за принуждённого [предл]
     peaceful_decide: tuple = ("Хищники", "Контролёры")  # кто решает; Хранители и Дрейфующие — ничего (spec 05); R6 расширяет
 
+    # --- 06 каналы дохода (spec 06): все числа [предл], получены в пробе, не из документов ---
+    smuggling_enabled: bool = True
+    smuggling_archetypes: tuple = ("Дрейфующие", "Хищники")   # решение Стана 2026-10-25; Хранители и Контролёры не контрабандируют
+    smuggling_yield: float = 6.0                   # порций с человека в тик [предл]
+    smuggling_cap_people: int = 20                 # занятых в канале не больше [предл]
+    market_cap: float = 60.0                       # потолок внешнего рынка на фракцию в тик [предл]; без него деньги из воздуха
+    heat_per_income: float = 0.1                   # [предл]
+    heat_decay: float = 4.0                        # [предл]
+    heat_threshold: float = 60.0                   # срыв при достижении [предл]
+    heat_after_bust: float = 20.0                  # [предл]
+    bust_detain_share: float = 0.25                # доля занятых, уходящих в «задержаны» [предл]
+    bust_pause: int = 5                            # тиков простоя после срыва [предл]
+    fees_enabled: bool = True
+    fee_archetypes: tuple = ("Хищники",)           # решение Стана: у Контролёров уже есть пошлина
+    fee_rate: float = 1.5                          # с свободного человека в тик [предл]
+    fee_region_share: float = 0.3                  # не больше доли Достатка региона [предл]
+    fee_drag: float = 0.02                         # регион беднеет на долю собранного [предл]
+    prisoner_sale_enabled: bool = True
+    sale_archetypes: tuple = ("Хищники",)
+    sale_share: float = 0.5                        # доля потерь проигравшего, уходящая в «проданы» вместо «погибли» [предл]
+    prisoner_price: float = 20.0                   # запас за проданного [предл]
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

@@ -4,12 +4,12 @@
 Каждое изменение пишется в журнал (11 S2d): tick, phase, module, target, old, new, reason_code.
 """
 from dataclasses import dataclass, field
-from math import floor
+from math import ceil, floor
 
 from .params import Params
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
-BUCKETS_OUT = ("dead", "deserted", "expelled")  # куда уходят люди; сумма с живыми = старт (§1)
+BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold")  # куда уходят люди; сумма с живыми = старт (§1)
 CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
 
@@ -46,6 +46,10 @@ class Faction:
     depot: str | None = None        # адрес пула: имя объекта или CACHE (spec 03b)
     expelled: int = 0               # ведро «изгнаны» (spec 05); никто их не принимает
     forced_mode: bool = False       # режим принудительного самообеспечения (spec 05)
+    detained: int = 0               # ведро «задержаны» — срывы контрабанды (spec 06)
+    sold: int = 0                   # ведро «проданы» — торговля пленными, вне мира (spec 06)
+    heat: float = 0.0               # внимание властей к контрабанде (spec 06)
+    bust_until: int = 0             # до какого тика канал стоит после срыва
 
     @property
     def manpower(self) -> int:
@@ -266,6 +270,35 @@ class World:
         return next(s for s in self.sites if s.name == name)
 
     # ---------- 06: голод ----------
+    def free_people(self, f: Faction) -> int:
+        """Люди не на объектах: могут работать в каналах (spec 06)."""
+        caps = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        return f.manpower - min(f.manpower, caps)
+
+    def channels(self, f: Faction):
+        """Spec 06: контрабанда (внешний рынок, Heat), поборы с родного региона."""
+        p = self.p
+        fr = self.free_people(f)
+        if p.smuggling_enabled:
+            if f.archetype in p.smuggling_archetypes and not self.staffed(f) \
+                    and self.tick >= f.bust_until and fr >= 3:
+                n = min(fr, p.smuggling_cap_people)
+                inc = min(p.smuggling_yield * n, p.market_cap)
+                self.setf(f, "supply", f.supply + inc, 3, "06", "SMUGGLING")
+                self.setf(f, "heat", round(f.heat + p.heat_per_income * inc, 6), 3, "06", "SMUGGLING")   # округление: порог и журнал видят одно число
+            self.setf(f, "heat", round(max(0.0, f.heat - p.heat_decay), 6), 3, "06", "HEAT_DECAY")
+            if f.heat >= p.heat_threshold:
+                n = min(fr, p.smuggling_cap_people)
+                d = ceil(n * p.bust_detain_share)
+                moved = self._move(f, d, p.desertion_order, "detained", 3, "BUST")
+                self.setf(f, "heat", p.heat_after_bust, 3, "06", "BUST")
+                self.setf(f, "bust_until", self.tick + p.bust_pause, 3, "06", "BUST")
+                self.events.append(dict(tick=self.tick, kind="bust", faction=f.name, n=moved))
+        if p.fees_enabled and f.archetype in p.fee_archetypes and fr >= 3:
+            inc = min(p.fee_rate * fr, self.regions[f.home] * p.fee_region_share)
+            self.setf(f, "supply", f.supply + inc, 3, "06", "PROTECTION_FEE")
+            self.set_region(f.home, self.regions[f.home] - inc * p.fee_drag, 3, "FEE_DRAG")
+
     def expected_income(self, f: Faction) -> float:
         """Ожидаемый приход в сутки: доход объектов с экипажем (03a) + налёт в среднем за кулдаун (06 S3)."""
         p = self.p
@@ -301,6 +334,7 @@ class World:
         p = self.p
         if f.manpower == 0:
             return
+        self.channels(f)
         self.decide(f)
         if f.forced_mode:
             k = self.forced_count(f)
@@ -392,7 +426,12 @@ class World:
             loser_loss = floor(min(0.5 * part[lose.name], p.assault_loss_cap * lose.manpower))
             # Трактовка v0: победитель не теряет больше, чем участвовало с его стороны.
             winner_loss = min(floor(loser_loss / ratio), part[win.name])
-        kl = self.kill_many(lose, loser_loss, 7, "ASSAULT")
+        ns = floor(loser_loss * p.sale_share) if (p.prisoner_sale_enabled and win.archetype in p.sale_archetypes) else 0
+        kl = self.kill_many(lose, loser_loss - ns, 7, "ASSAULT")
+        ks = self._move(lose, ns, p.drain_order, "sold", 7, "PRISONER_SALE") if ns else 0
+        if ks:
+            self.setf(win, "supply", win.supply + p.prisoner_price * ks, 7, "06", "PRISONER_SALE")
+        kl += ks   # потери проигравшего для шока и метрик — все выбывшие в бою
         kw = self.kill_many(win, winner_loss, 7, "ASSAULT")
         sh = {}
         for f, k in ((lose, kl), (win, kw)):

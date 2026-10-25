@@ -2,6 +2,7 @@
 2026-10-25: пометка «ожидаемо красный» с DS4 снята по утверждённому plan 01, шаг 5; добавлен RG1.
 2026-10-25: добавлены RG2–RG5 и обратная проверка R3 по утверждённому plan 03a, шаг 3. Пометка DS4 не менялась.
 2026-10-25: добавлены OB1, RG6 и обратная проверка R4 по утверждённому plan 03b, шаг 4. OB2 добавлен после решения Стана смягчить критерий с 20 до 10 тиков (отчёт 03b).
+2026-10-25: добавлены IC1, IC2, IC3, IC5, R7, R8 по утверждённому plan 06, шаг 5; пометка «известный дефект» с DS4 снята — DS4 стал зелёным (см. отчёт 06; указание в самой пометке).
 2026-10-25: добавлены HD1–HD3, R5, R6; критерий RG4 переписан (люди ≥ 95, мораль < 55); счёт людей включает изгнанных — по утверждённому plan 05, шаг 5 (решение Стана: порог морали 55, RG4 вариант а)."""
 import pytest
 
@@ -9,7 +10,7 @@ from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5")
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -19,7 +20,7 @@ KNOWN_DEFECT = pytest.mark.xfail(
            "Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
 
 
-@pytest.mark.parametrize("sc", ["DS1", "DS2", pytest.param("DS4", marks=KNOWN_DEFECT), "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3"])
+@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5"])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]
