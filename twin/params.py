@@ -33,6 +33,19 @@ class Params:
     trophy_rate: float = 0.4                       # [док 06]
     trophy_armory_rate: float = 0.2                # 0.4 × 0.5 [док 06]
 
+    # --- 06 S3 регион и налёт (поставка 01) ---
+    region_start: float = 60.0                     # [предл]
+    region_max: float = 100.0                      # [док 06] шкала 0–100
+    region_recovery: float = 1.5                   # [док 06]
+    toll_drag: float = 0.05                        # [док 06]
+    raid_yield: float = 4.0                        # [док 06]
+    raid_cost: float = 8.0                         # [док 06]
+    raid_cooldown: int = 5                         # [док 06] «~5 суток»
+    share_rate: dict = field(default_factory=lambda: {
+        "Хищники": 0.35, "Контролёры": 0.10, "Хранители": 0.0, "Дрейфующие": 0.0})  # [док 06]
+    raiding_archetypes: tuple = ("Хищники",)       # [док 06]
+    raids_enabled: bool = True
+
     # --- 13 территория ---
     assault_dos: float = 10.0                      # временная замена оси R [предл]
     archetype_assault_threshold: dict = field(default_factory=lambda: {

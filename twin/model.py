@@ -37,6 +37,7 @@ class Faction:
     deserted: int = 0
     days_supply: float = 0.0       # публикуемая производная (фаза 4)
     last_assault: int = -10**6
+    last_raid: int = -10**6
 
     @property
     def manpower(self) -> int:
@@ -59,6 +60,16 @@ class World:
     events: list = field(default_factory=list)   # события для метрик (штурмы, дезертирство, сдача)
     forced_assaults: dict = field(default_factory=dict)  # tick -> [(attacker, site_name)]
     scheduled: dict = field(default_factory=dict)        # tick -> [callable(world)]
+    prosperity: float | None = None                      # TF_RegionProsperity (06), один регион
+
+    def __post_init__(self):
+        if self.prosperity is None:
+            self.prosperity = self.p.region_start
+
+    def set_region(self, value, phase, reason):
+        old = self.prosperity
+        self.prosperity = max(0.0, min(self.p.region_max, value))
+        self.rec(phase, "06", "region.prosperity", old, self.prosperity, reason)
 
     # ---------- журнал ----------
     def rec(self, phase, module, target, old, new, reason):
@@ -135,12 +146,16 @@ class World:
         for fn in self.scheduled.get(self.tick, []):
             fn(self)
         fs = list(self.factions.values())
-        # фаза 1 — затухание шока
+        # фаза 1 — затухание шока, восстановление региона
         for f in fs:
             self.setf(f, "shock", max(0.0, f.shock - self.p.shock_decay_per_tick), 1, "04", "DECAY")
-        # фаза 2 — приход и расход
+        self.set_region(self.prosperity + self.p.region_recovery, 1, "REGION_RECOVERY")
+        # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
         for f in fs:
-            income = sum(s.yield_ for s in self.staffed(f) if not s.income_disabled)
+            paying = [s for s in self.staffed(f) if not s.income_disabled]
+            income = sum(s.yield_ for s in paying)
+            for s in paying:
+                self.set_region(self.prosperity - s.yield_ * self.p.toll_drag, 2, "TOLL_DRAG")
             new = max(0.0, f.supply + income - self.expense(f))
             self.setf(f, "supply", new, 2, "06", "UPKEEP")
         # фаза 3 — голод и дезертирство (читает DaysOfSupply прошлого тика)
@@ -156,6 +171,23 @@ class World:
             self.assault(self.factions[atk_name], self.site(site_name), forced=True)
         for f in fs:
             self.decide_assault(f)
+        for f in fs:
+            self.raid(f)
+
+    # ---------- 06 S3: налёт на регион ----------
+    def raid(self, f: Faction):
+        p = self.p
+        if not p.raids_enabled or f.archetype not in p.raiding_archetypes or f.manpower == 0:
+            return
+        if self.tick - f.last_raid < p.raid_cooldown:
+            return
+        f.last_raid = self.tick
+        loot = self.prosperity * p.raid_yield
+        to_pool = loot * (1 - p.share_rate[f.archetype])
+        self.setf(f, "supply", f.supply + to_pool, 7, "06", "RAID")
+        self.set_region(self.prosperity - p.raid_cost, 7, "RAID")
+        self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
+                                to_pool=to_pool, manpower=f.manpower))
 
     def site(self, name):
         return next(s for s in self.sites if s.name == name)

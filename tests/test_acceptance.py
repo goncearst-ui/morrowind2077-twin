@@ -1,20 +1,15 @@
-"""Чек-лист приёмки по spec 00 §6. Меняет только Стан (гейт protect-tests)."""
+"""Чек-лист приёмки: spec 00 §6 + spec 01 §2. Меняет только Стан (гейт protect-tests).
+2026-10-25: пометка «ожидаемо красный» с DS4 снята по утверждённому plan 01, шаг 5; добавлен RG1."""
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1")
 
 
-KNOWN_DEFECT = pytest.mark.xfail(
-    strict=True,
-    reason="Известный дефект v0, принят Станом 2026-10-25: у фракции без площадки нет дохода. "
-           "Закрывается intent 01 (06 S3). Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
-
-
-@pytest.mark.parametrize("sc", ["DS1", "DS2", pytest.param("DS4", marks=KNOWN_DEFECT)])
+@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1"])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]

@@ -48,6 +48,11 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         ss[0].owner, ss[1].owner = "A", "B"
         w = World({"A": a, "B": b}, ss, p)
         horizon = 200
+    elif sc == "RG1":
+        # один клан Хищников 30 чел. без площадки, 200 тиков (spec 01)
+        a = faction(p, "A", "Хищники", 30, 20, 0)
+        w = World({"A": a}, ss, p)
+        horizon = 200
     else:
         raise ValueError(sc)
     for f in w.factions.values():
@@ -123,6 +128,16 @@ def check(sc: str, w: World, series):
         ok_cons = all(e["supply_moved"] >= 0 for e in w.events if e["kind"] == "assault")
         res.append(("победитель не богатеет сверх убыли проигравшего", ok_cons, "трофей = ровно убыль проигравшего"))
         res.append(("сценарий валиден: был хотя бы 1 штурм", m["_assaults"] >= 1, f"штурмов: {m['_assaults']}"))
+    elif sc == "RG1":
+        raids = [e for e in w.events if e["kind"] == "raid"]
+        end_p = w.prosperity
+        res.append(("угодья выедаются: Достаток на тике 200 ниже стартового", end_p < p.region_start,
+                    f"Достаток {p.region_start:.0f} → {end_p:.1f}"))
+        ok = len(raids) >= 10
+        first = sum(e["loot"] for e in raids[:5]) / 5 if ok else 0
+        last = sum(e["loot"] for e in raids[-5:]) / 5 if ok else 0
+        res.append(("добыча падает: последние 5 налётов беднее первых 5", ok and last < first,
+                    f"налётов {len(raids)}; средняя добыча первых 5 — {first:.0f}, последних 5 — {last:.0f}"))
     return res, m
 
 
