@@ -5,7 +5,7 @@
 """
 from dataclasses import replace
 
-from .model import CACHE, Faction, Site, World
+from .model import BUCKETS_OUT, CACHE, Faction, Site, World
 from .params import Params
 
 
@@ -36,6 +36,7 @@ SOLO = {  # spec 03a: (уклад, численность, объекты)
     "RG3": ("Хранители", 100, ("Перевал", "Насосная")),
     "RG4": ("Контролёры", 100, ("Перевал", "Насосная")),
     "RG5": ("Хранители", 30, ()),
+    "HD2": ("Контролёры", 100, ("Перевал", "Насосная")),   # spec 05: то же, что RG4, критерии про решения
 }
 
 
@@ -80,6 +81,19 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World({"A": a, "B": b}, ss, p)
         w.forced_assaults = {5: [("A", "Перевал")]}
         horizon = 55
+    elif sc == "HD1":
+        # spec 05: Хищники 60 на Насосной, без войны, 100 тиков
+        ss[1].owner = "A"
+        a = faction(p, "A", "Хищники", 60, 20, 15)
+        w = World({"A": a}, ss, p)
+        horizon = 100
+    elif sc == "HD3":
+        # spec 05: Хранители 100 теряют доход Перевала (как DS2), запас на 4 суток, 100 тиков
+        ss[0].owner = "A"
+        a = faction(p, "A", "Хранители", 100, 4, 40)
+        w = World({"A": a}, ss, p)
+        w.scheduled = {1: [lambda w: setattr(w.site("Перевал"), "income_disabled", True)]}
+        horizon = 100
     elif sc == "RG6":
         # spec 03b: два Хищника без объектов, каждый в своём родном регионе
         a = faction(p, "A", "Хищники", 30, 20, 0)
@@ -223,6 +237,27 @@ def check(sc: str, w: World, series):
                     f"Достаток RA {ra:.1f}, RB {rb:.1f}, одиночка (RG1) {solo_end:.1f}"))
         raids = [e for e in w.events if e["kind"] == "raid"]
         res.append(("грабили обе фракции", {e["faction"] for e in raids} == {"A", "B"}, f"налётов: {len(raids)}"))
+    elif sc in ("HD1", "HD2", "HD3"):
+        f = w.factions["A"]
+        exp_rows = [r for r in w.log if r[6] == "EXPEL" and r[3] == "A.expelled"]
+        forced_ticks = {r[0] for r in w.log if r[6] == "FORCED_LABOR" and r[3] == "A.supply"}
+        if sc == "HD1":
+            des = [r[0] for r in w.log if r[6] == "DESERTION" and r[3] == "A.deserted"]
+            res.append(("изгнанные есть", f.expelled > 0, f"изгнано {f.expelled}"))
+            first_e = exp_rows[0][0] if exp_rows else None
+            ok = first_e is not None and (not des or first_e <= des[0])
+            res.append(("первое изгнание не позже первого дезертирства", ok,
+                        f"изгнание: тик {first_e}, дезертирство: " + (f"тик {des[0]}" if des else "не было")))
+            tot = f.manpower + sum(getattr(f, b) for b in BUCKETS_OUT)
+            res.append(("изгнанные взяты из живых: люди сохранены", tot == m["A"]["start"], f"{tot} из {m['A']['start']}"))
+        elif sc == "HD2":
+            res.append(("нет дезертиров", f.deserted == 0, f"дезертировало {f.deserted}"))
+            res.append(("принуждение работало не меньше 10 тиков", len(forced_ticks) >= 10, f"тиков с принуждением {len(forced_ticks)}"))
+            res.append(("цена видна: мораль ниже порога решения", f.morale < p.decision_morale_threshold,
+                        f"мораль {f.morale:.1f}, порог {p.decision_morale_threshold:.0f}"))
+        else:
+            res.append(("Хранители не изгоняют", f.expelled == 0, f"изгнано {f.expelled}"))
+            res.append(("Хранители не принуждают", not forced_ticks and not f.forced_mode, f"тиков с принуждением {len(forced_ticks)}"))
     elif sc in SOLO:
         a, f = m["A"], w.factions["A"]
         if sc in ("RG2", "RG3"):
@@ -231,7 +266,9 @@ def check(sc: str, w: World, series):
             res.append(("запас на тике 200 не ниже порога голода", f.days_supply >= p.hunger_threshold,
                         f"запас {f.days_supply:.1f} суток, порог {p.hunger_threshold:.0f}"))
         if sc == "RG4":
-            res.append(("худеют до ёмкости, но не ниже (80–90 чел.)", 80 <= a["end"] <= 90, f"в конце {a['end']} чел."))
+            res.append(("люди не худеют (≥ 95), цена видна в морали (< порога решения)",
+                        a["end"] >= 95 and f.morale < p.decision_morale_threshold,
+                        f"в конце {a['end']} чел., мораль {f.morale:.1f}, порог {p.decision_morale_threshold:.0f}"))
         if sc == "RG5":
             res.append(("голод не отменён: без объектов фракция тает", a["end"] < a["start"], f"{a['start']} → {a['end']} чел."))
     return res, m
@@ -248,4 +285,6 @@ REVERSE = {
     "R2": (replace(Params(), desertion_cap_per_tick=None), ("DS2",), "без потолка дезертирства за тик"),
     "R3": (replace(Params(), worker_yield=0.0), ("RG2",), "доход за работника 0 (как до 03a)"),
     "R4": (replace(Params(), depot_loss_rate=0.0), ("OB1",), "удар по складу ничего не уничтожает (DepotLossRate 0)"),
+    "R5": (replace(Params(), decisions_enabled=False), ("HD1",), "решения при голоде выключены"),
+    "R6": (replace(Params(), peaceful_decide=("Хищники", "Контролёры", "Хранители")), ("HD3",), "Хранители принимают решения как Хищники"),
 }

@@ -9,6 +9,7 @@ from math import floor
 from .params import Params
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
+BUCKETS_OUT = ("dead", "deserted", "expelled")  # куда уходят люди; сумма с живыми = старт (§1)
 CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
 
@@ -43,6 +44,8 @@ class Faction:
     workers: dict = field(default_factory=dict)  # объект -> работников сверх MinCrew (spec 03a)
     home: str = "common"            # родной регион: налёты бьют по нему (spec 03b)
     depot: str | None = None        # адрес пула: имя объекта или CACHE (spec 03b)
+    expelled: int = 0               # ведро «изгнаны» (spec 05); никто их не принимает
+    forced_mode: bool = False       # режим принудительного самообеспечения (spec 05)
 
     @property
     def manpower(self) -> int:
@@ -182,6 +185,14 @@ class World:
             out.append((s, extra, s.yield_ + self.p.worker_yield * extra))
         return out
 
+    def forced_count(self, f: Faction) -> int:
+        """Принуждённые (spec 05): люди сверх суммарного потолка экипажа укомплектованных объектов."""
+        cap = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        return max(0, f.manpower - cap)
+
+    def fighters(self, f: Faction) -> int:
+        return f.manpower - (self.forced_count(f) if f.forced_mode else 0)
+
     def crew(self, f: Faction, site: Site) -> int:
         return min(f.manpower, site.min_crew + 2)
 
@@ -255,8 +266,47 @@ class World:
         return next(s for s in self.sites if s.name == name)
 
     # ---------- 06: голод ----------
+    def expected_income(self, f: Faction) -> float:
+        """Ожидаемый приход в сутки: доход объектов с экипажем (03a) + налёт в среднем за кулдаун (06 S3)."""
+        p = self.p
+        inc = sum(i for s, _, i in self.work_plan(f) if not s.income_disabled)
+        if p.raids_enabled and f.archetype in p.raiding_archetypes:
+            inc += self.regions[f.home] * p.raid_yield * (1 - p.share_rate[f.archetype]) / p.raid_cooldown
+        return inc
+
+    def decide(self, f: Faction):
+        """Spec 05: решение при голоде. Условие: запас ниже порога и мораль ниже порога решения."""
+        p = self.p
+        if not p.decisions_enabled or f.manpower == 0:
+            return
+        if f.forced_mode and f.days_supply >= p.hunger_threshold:
+            self.setf(f, "forced_mode", False, 3, "05", "FORCED_LABOR")
+        if f.archetype not in p.peaceful_decide:
+            return
+        if not (f.days_supply < p.hunger_threshold and f.morale < p.decision_morale_threshold):
+            return
+        if f.archetype == "Контролёры":
+            if not f.forced_mode:
+                self.setf(f, "forced_mode", True, 3, "05", "FORCED_LABOR")
+            return
+        # Хищники и прочие «изгоняющие» (R6): изгонять, пока расход не впишется в ожидаемый приход
+        before, n = f.manpower, 0
+        while n < p.expel_cap_per_tick and f.manpower > 0 and self.expense(f) > self.expected_income(f):
+            n += self._move(f, 1, p.desertion_order, "expelled", 3, "EXPEL")
+        if n:
+            self.add_personnel_shock(f, n, before, p.expel_shock_weight, 3, "EXPEL")
+            self.events.append(dict(tick=self.tick, kind="expel", faction=f.name, n=n))
+
     def hunger(self, f: Faction):
         p = self.p
+        if f.manpower == 0:
+            return
+        self.decide(f)
+        if f.forced_mode:
+            k = self.forced_count(f)
+            if k:
+                self.setf(f, "supply", f.supply + p.forced_yield * k, 3, "05", "FORCED_LABOR")
+                self.setf(f, "morale", max(0.0, f.morale - p.forced_morale_cost * k), 3, "05", "FORCED_LABOR")
         if f.manpower == 0:
             return
         if f.days_supply < p.hunger_threshold:
@@ -299,10 +349,10 @@ class World:
     # ---------- 13: решение о штурме ----------
     def visible_power(self, f: Faction) -> float:
         # атакующий не видит стойкость противника (13)
-        return f.manpower * (0.5 + f.armory / 100)
+        return self.fighters(f) * (0.5 + f.armory / 100)
 
     def power(self, f: Faction) -> float:
-        return f.manpower * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
+        return self.fighters(f) * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
 
     def decide_assault(self, f: Faction):
         p = self.p

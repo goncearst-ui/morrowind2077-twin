@@ -63,5 +63,14 @@ class Params:
     assault_loss_cap: float = 0.25                 # [док 13]
     old_loss_formula: bool = False                 # True = «половина всей фракции» (обратная проверка R1)
 
+    # --- 05 решения при голоде (spec 05) ---
+    decisions_enabled: bool = True                 # False = обратная проверка R5
+    decision_morale_threshold: float = 55.0        # [предл], решение Стана 2026-10-25 (вместо 40 из intent 05)
+    expel_cap_per_tick: int = 3                    # [предл]
+    expel_shock_weight: float = 0.5                # [док 04], как у дезертирства
+    forced_yield: float = 2.0                      # порций в сутки с принуждённого [предл]
+    forced_morale_cost: float = 0.5                # мораль в тик за принуждённого [предл]
+    peaceful_decide: tuple = ("Хищники", "Контролёры")  # кто решает; Хранители и Дрейфующие — ничего (spec 05); R6 расширяет
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
