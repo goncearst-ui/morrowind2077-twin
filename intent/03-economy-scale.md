@@ -74,6 +74,7 @@
 | 03c | intent/03c-raid-on-object-wounded.md | 03b |
 | 03d | intent/03d-common-region-envoys.md | 03b; 08 в двойнике |
 | 04 | intent/04-pay-by-tier.md | 03c |
+| 05 | intent/05-hunger-decisions.md | 03a; порядок изгнания использует 03c |
 
 ## Что движок умеет — для будущей спецификации (A/B/C)
 - Двойник: всё выше — числа, движковых допущений нет.
