@@ -8,7 +8,13 @@ from twin.scenarios import REVERSE, evaluate, run
 SCENARIOS = ("DS1", "DS2", "DS4")
 
 
-@pytest.mark.parametrize("sc", SCENARIOS)
+KNOWN_DEFECT = pytest.mark.xfail(
+    strict=True,
+    reason="Известный дефект v0, принят Станом 2026-10-25: у фракции без площадки нет дохода. "
+           "Закрывается intent 01 (06 S3). Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
+
+
+@pytest.mark.parametrize("sc", ["DS1", "DS2", pytest.param("DS4", marks=KNOWN_DEFECT)])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]

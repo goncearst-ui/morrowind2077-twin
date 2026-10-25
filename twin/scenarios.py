@@ -38,6 +38,7 @@ def build(sc: str, p: Params) -> tuple[World, int]:
     elif sc == "DS2":
         a = faction(p, "A", "Хищники", 30, 4, 40)
         ss[0].owner = "A"
+        a.hunger_debt = 300.0   # накопленный долг = 10 уходов; решение Стана 2026-10-25 (отчёт 00, решение 2а)
         w = World({"A": a}, ss, p)
         w.scheduled = {1: [lambda w: setattr(w.site("Перевал"), "income_disabled", True)]}
         horizon = 100
