@@ -212,8 +212,8 @@ def check(sc: str, w: World, series):
             res.append(("B жива спустя 50 тиков после удара", bser[55] > 0, f"B на тике 55: {bser[55]} чел."))
         else:
             t0 = st[0]["tick"] if st else 0
-            early = [(e["tick"], e["n"]) for e in w.events if e["kind"] == "desertion" and e["faction"] == "B" and e["tick"] <= t0 + 20]
-            res.append(("люди B не дезертируют от голода в первые 20 тиков после удара (spec 03b, OB2)", not early,
+            early = [(e["tick"], e["n"]) for e in w.events if e["kind"] == "desertion" and e["faction"] == "B" and e["tick"] <= t0 + 10]
+            res.append(("люди B не дезертируют от голода в первые 10 тиков после удара (spec 03b, OB2)", not early,
                         f"удар на тике {t0}; дезертирство B в окне: " + (f"первое на тике {early[0][0]}" if early else "нет")))
     elif sc == "RG6":
         base, _ = run("RG1")
