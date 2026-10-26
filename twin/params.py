@@ -137,5 +137,21 @@ class Params:
     knowledge_expires_on_owner_change: bool = True  # знание гаснет при смене владельца [решение Стана 2026-10-26]; False — только для обратной проверки R20
     rumor_drop_stale: bool = True                  # слух, пришедший после смены владельца, отбрасывается [предл]; False — только для R22
 
+    # --- 08b война как состояние пары (spec 08b); линия войны — rel_level_cuts[3] [док 08], порог снаряжения — assault_armory_min [док 13] ---
+    wars_enabled: bool = False                     # False = журнал как до 08b (регрессия строка в строку) [предл]
+    war_chance_base: float = 4.0                   # прибавка к счётчику решимости в тик на линии Enemy [предл]
+    war_chance_slope: float = 3.0                  # плюс за каждую единицу H сверх линии [предл]
+    war_chance_cap: float = 15.0                   # потолок прибавки в тик [enRAGE]
+    war_world_gap: int = 3                         # тиков между объявлениями в мире [enRAGE]
+    war_max_per_faction: int = 2                   # действующих войн у фракции, считая защиту [предл]
+    war_min_dos: float = 1.0                       # запас зачинщика, суток, не меньше [предл]
+    war_needs_motive: bool = True                  # объявление требует мотив 08c [предл]
+    war_cost: float = 5.0                          # запаса в тик с каждой стороны [предл]
+    war_grace: int = 3                             # суток до проверки «сломлены» и «выдохлись» [enRAGE]
+    war_broken_share: float = 0.25                 # людей у защитника от старта войны [enRAGE]
+    war_exhausted_share: float = 0.40              # людей у зачинщика от старта войны [enRAGE]
+    war_max_days: int = 20                         # срок войны, «сдались» [enRAGE]
+    war_truce: int = 4                             # тиков запрета новой войны пары после конца [enRAGE: 3–5]
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

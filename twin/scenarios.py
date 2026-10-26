@@ -4,6 +4,7 @@
 Раскладка по вёдрам на старте: 30% Steady / 40% Ordinary / 30% Skittish. Armory 50. Запас на 20 суток (DS2 — на 4).
 """
 from dataclasses import replace
+from math import floor
 
 from .model import BUCKETS_OUT, CACHE, Faction, Site, World
 from .params import Params
@@ -33,6 +34,7 @@ def faction(world_p, name, arche, n, dos, site_cost):
 
 RL_SCENARIOS = ("RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
 MK_SCENARIOS = ("MK1", "MK2", "MK3", "MK4", "MK5", "MK6")
+WR_SCENARIOS = ("WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d")
 
 
 SOLO = {  # spec 03a: (уклад, численность, объекты)
@@ -266,6 +268,45 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             else:  # MK6
                 w.forced_raids = {5: [("A", "Перевал")], 12: [("A", "Перевал")]}
                 horizon = 14
+    elif sc in WR_SCENARIOS:
+        # spec 08b: чистая обстановка как у RL и MK; отношения, знание и война включены; события только принудительные.
+        # Карту порогов уклада не обнуляем: она нужна самой войне (список «штурмовых» укладов). Автономные штурмы отключены
+        # порогом запаса assault_dos = 0 (по умолчанию он равен 10 суткам и совпадает с порогом нужды: нужда запускала бы штурм).
+        # Уточнение обстановки против spec §2 (plan 08b, «Риски»): порог нужды 10 суток не поднимается — тот же порог запускает голодный долг.
+        # Вместо этого у A есть свой объект «Рудник» (доход = расход A), запас держится на 9.9 суток, нужда есть всё время, долг копится по 0.1 в сутки.
+        p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, decisions_enabled=False, relations_enabled=True,
+                    knowledge_enabled=True, wars_enabled=True, assault_dos=0.0, raids_enabled=False)
+        arche = "Контролёры" if sc == "WR2" else "Хищники"
+        a = faction(p, "A", arche, 90, 9.9, 0)
+        rudnik = Site("Рудник", 0, 90 * p.per_head_cost * p.archetype_cost_mult[arche], 1)
+        rudnik.owner = "A"
+        if sc == "WR4":
+            ss = [rudnik] + sites3()
+            ss[1].owner, ss[2].owner, ss[3].owner = "B", "C", "D"
+            fs = {"A": a, "B": faction(p, "B", "Хранители", 60, 60, 40),
+                  "C": faction(p, "C", "Хранители", 60, 60, 15), "D": faction(p, "D", "Хранители", 60, 60, 20)}
+            w = World(fs, ss, p)
+            w.known_at_start = {"A": ("Перевал", "Насосная", "Жила")}
+            horizon = 30
+        else:
+            ss = [rudnik] + sites()
+            ss[1].owner = "B"
+            fs = {"A": a, "B": faction(p, "B", "Хранители", 60, 60, 40)}
+            if sc == "WR7d":
+                fs["C"] = faction(p, "C", "Хищники", 90, 60, 0)
+            w = World(fs, ss, p)
+            if sc != "WR3":
+                w.known_at_start = {"A": ("Перевал",)}
+            horizon = {"WR1": 20, "WR2": 40, "WR3": 40, "WR5": 25, "WR6": 45}.get(sc, 26)
+            if sc == "WR7a":
+                w.scheduled = {25: [lambda w: w.kill_many(w.factions["B"], w.factions["B"].manpower - floor(0.25 * w.wars[("A", "B")]["mp0"]["B"]), 7, "SCENARIO_KILL")]}
+            elif sc == "WR7b":
+                w.scheduled = {25: [lambda w: w.kill_many(w.factions["A"], w.factions["A"].manpower - floor(0.40 * w.wars[("A", "B")]["mp0"]["A"]), 7, "SCENARIO_KILL")]}
+            elif sc == "WR7c":
+                w.forced_assaults = {25: [("A", "Перевал")]}
+            elif sc == "WR7d":
+                w.forced_assaults = {25: [("C", "Перевал")]}
     else:
         raise ValueError(sc)
     for f in w.factions.values():
@@ -720,6 +761,62 @@ def check(sc: str, w: World, series):
             ev = [e for e in w.events if e["kind"] == "raid_object"]
             res.append(("сценарий валиден: два налёта A на объект B, тики 5 и 12", [e["tick"] for e in ev] == [5, 12], f"налёты на тиках {[e['tick'] for e in ev]}"))
             res.append(("слепое нападение одно: первый налёт; второй A уже знает объект", [(e["tick"], e["attacker"]) for e in blind] == [(5, "A")], f"слепые: {[(e['tick'], e['attacker']) for e in blind]}"))
+    elif sc in WR_SCENARIOS:
+        def wrows(target):
+            return [(r[0], r[4], r[5], r[6]) for r in w.log if r[3] == target]
+        near = lambda x, y: x is not None and abs(x - y) < 1e-6
+        if sc == "WR1":
+            acc = wrows("war.A>B.acc")
+            up = [(t, new) for t, old, new, rs in acc if t <= 18]
+            ok_up = len(up) == 18 and all(t == i + 1 and near(v, 5.5 * (i + 1)) for i, (t, v) in enumerate(up))
+            res.append(("счётчик A→B растёт 5.5, 11.0, …, 99.0 на тиках 1…18", ok_up, f"значения: {[v for _, v in up]}"))
+            st, gl = wrows("war.A>B.state"), wrows("war.A>B.goal")
+            res.append(("война объявлена на тике 19, и до него строк state нет", st == [(19, 0, 1, "WAR_DECLARED")], f"строки state: {st}"))
+            res.append(("цель — «Перевал», записана на тике 19", gl == [(19, None, "Перевал", "WAR_DECLARED")], f"строки goal: {gl}"))
+            res.append(("после объявления счётчик 4.5", near(w.war_acc.get(("A", "B")), 4.5), f"acc в конце: {w.war_acc.get(('A', 'B'))}"))
+            res.append(("запас A всё время между 1 и 10 сутками (нужда без побочного голода)", all(1.0 <= dos < p.hunger_threshold for dos in [w.factions['A'].days_supply]),
+                        f"запас A в конце: {w.factions['A'].days_supply:.2f} суток"))
+        elif sc in ("WR2", "WR3"):
+            rows08b = [r for r in w.log if r[2] == "08b"]
+            res.append(("ни одной строки модуля 08b за 40 тиков (ни acc, ни state)", not rows08b, f"строк 08b: {len(rows08b)}"))
+            if sc == "WR2":
+                res.append(("сценарий валиден: H(A→B) ниже линии Enemy", w.rel_h("A", "B") < p.rel_level_cuts[2], f"H = {w.rel_h('A', 'B'):.1f}, линия {p.rel_level_cuts[2]}"))
+            else:
+                res.append(("сценарий валиден: A нуждается, но ничего не знает", w.factions["A"].days_supply < p.hunger_threshold and not w.know,
+                            f"запас A {w.factions['A'].days_supply:.1f} суток, записей знания {len(w.know)}"))
+        elif sc == "WR4":
+            b, c, d = wrows("war.A>B.state"), wrows("war.A>C.state"), wrows("war.A>D.state")
+            res.append(("война с B объявлена на тике 19", b == [(19, 0, 1, "WAR_DECLARED")], f"строки: {b}"))
+            res.append(("война с C объявлена на тике 22 (через 3 тика)", c == [(22, 0, 1, "WAR_DECLARED")], f"строки: {c}"))
+            res.append(("с D не объявлена до тика 30 (у A уже две войны)", d == [], f"строки: {d}"))
+            res.append(("счётчик A→D стоит на 104.5", near(w.war_acc.get(("A", "D")), 104.5), f"acc(A→D): {w.war_acc.get(('A', 'D'))}"))
+            res.append(("запас A не упал ниже 1 суток", w.factions["A"].days_supply >= p.war_min_dos, f"запас A: {w.factions['A'].days_supply:.2f} суток"))
+        elif sc == "WR5":
+            cost = [r for r in w.log if r[6] == "WAR_COST"]
+            ok = True
+            for who in ("A", "B"):
+                mine = [r for r in cost if r[3] == f"{who}.supply"]
+                ok = ok and [r[0] for r in mine] == list(range(20, 26)) and all(abs((r[4] - r[5]) - 5.0) < 1e-6 for r in mine)
+            res.append(("строки WAR_COST у A и у B на тиках 20…25, по 6, каждая со снижением ровно на 5.0", ok and len(cost) == 12,
+                        f"строк {len(cost)}, тики {sorted({r[0] for r in cost})}"))
+            res.append(("на тике 19 списания нет", not [r for r in cost if r[0] == 19], ""))
+        elif sc == "WR6":
+            st, tr = wrows("war.A>B.state"), wrows("truce.A-B")
+            res.append(("война закрыта на тике 39 по сроку, других строк state нет", st == [(19, 0, 1, "WAR_DECLARED"), (39, 1, 0, "WAR_END_TIMEOUT")], f"строки state: {st}"))
+            res.append(("перемирие с тика 39 до 43, TRUCE_END на тике 43", tr == [(39, 0, 43, "TRUCE"), (43, 43, 0, "TRUCE_END")], f"строки truce: {tr}"))
+            res.append(("новой войны до тика 45 нет", len([x for x in st if x[2] == 1]) == 1, f"объявлений: {len([x for x in st if x[2] == 1])}"))
+        else:
+            reason = {"WR7a": "WAR_END_BROKEN", "WR7b": "WAR_END_EXHAUSTED", "WR7c": "WAR_END_GOAL", "WR7d": "WAR_END_GOAL_LOST"}[sc]
+            st = wrows("war.A>B.state")
+            if sc == "WR7a":
+                res.append(("сценарий валиден: у B остаётся ровно 25% от 60", w.factions["B"].manpower == floor(0.25 * 60), f"у B {w.factions['B'].manpower} из 60"))
+            elif sc == "WR7b":
+                res.append(("сценарий валиден: у A остаётся ровно 40% от 90", w.factions["A"].manpower == floor(0.40 * 90), f"у A {w.factions['A'].manpower} из 90"))
+            else:
+                att = [e for e in w.events if e["kind"] == "assault"]
+                res.append(("сценарий валиден: принудительный штурм на тике 25 с победой атакующего", len(att) == 1 and att[0]["tick"] == 25 and att[0]["attacker_wins"],
+                            f"штурмы: {[(e['tick'], e['attacker'], e['attacker_wins']) for e in att]}"))
+            res.append((f"война закрыта на тике 25, {reason}", st == [(19, 0, 1, "WAR_DECLARED"), (25, 1, 0, reason)], f"строки state: {st}"))
     return res, m
 
 
@@ -752,4 +849,11 @@ REVERSE = {
     "R20": (replace(Params(), knowledge_expires_on_owner_change=False), ("MK3",), "знание не гаснет при смене владельца"),
     "R21": (replace(Params(), hunger_threshold=1e9), ("MK4",), "порог нужды выключен (нуждаются все)"),
     "R22": (replace(Params(), rumor_drop_stale=False), ("MK5",), "устаревший слух не отбрасывается"),
+    "R23": (replace(Params(), war_needs_motive=False), ("WR3",), "война без мотива (объявление не требует нужды и знания)"),
+    "R24": (replace(Params(), war_world_gap=0), ("WR4",), "в мире нет паузы между объявлениями"),
+    "R25": (replace(Params(), war_max_per_faction=99), ("WR4",), "число войн у фракции не ограничено"),
+    "R26": (replace(Params(), war_cost=0.0), ("WR5",), "война ничего не стоит"),
+    "R27": (replace(Params(), war_max_days=1000), ("WR6",), "срок войны не ограничен"),
+    "R28": (replace(Params(), war_broken_share=0.0), ("WR7a",), "конец «сломлены» выключен"),
+    "R29": (replace(Params(), war_exhausted_share=0.0), ("WR7b",), "конец «выдохлись» выключен"),
 }

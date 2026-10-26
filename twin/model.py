@@ -110,6 +110,10 @@ class World:
     know_cursor: int = 0
     know_started: bool = False
     rumor_seq: dict = field(default_factory=dict)
+    wars: dict = field(default_factory=dict)             # (зачинщик, цель) -> запись войны (spec 08b)
+    war_acc: dict = field(default_factory=dict)          # (зачинщик, цель) -> счётчик решимости
+    truce: dict = field(default_factory=dict)            # (A, B) по алфавиту -> тик конца перемирия
+    last_war_tick: int = -10**9
 
     @property
     def prosperity(self) -> float:
@@ -497,6 +501,9 @@ class World:
         # фаза 8 — знание и мотив (spec 08c): только читает, в состояние других модулей не пишет
         if self.p.knowledge_enabled:
             self.knowledge_step()
+        # фаза 8 — война как состояние пары (spec 08b): читает 08a и 08c, пишет в чужие модули только цену (06)
+        if self.p.wars_enabled:
+            self.war_step()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
@@ -955,3 +962,97 @@ class World:
             self.rec(8, "08c", f"motive.{f}>{sname}", 1, 0, "MOTIVE")
         self.motive = now
         self.know_cursor = len(self.events)
+
+    # ---------- 08b: война как состояние пары ----------
+    def _war_count(self, name: str) -> int:
+        return sum(1 for (a, b) in self.wars if name in (a, b))
+
+    def _war_goal(self, a: str, b: str):
+        """Цель войны: объект b с наибольшим доходом среди подходящих (мотив a при war_needs_motive), при равенстве по имени."""
+        cand = [s for s in self.sites if s.owner == b and s.yield_ > 0
+                and (not self.p.war_needs_motive or (a, s.name) in self.motive)]
+        cand.sort(key=lambda s: (-s.yield_, s.name))
+        return cand[0] if cand else None
+
+    def _war_end(self, key, reason: str):
+        a, b = key
+        self.rec(8, "08b", f"war.{a}>{b}.state", 1, 0, reason)
+        self.events.append(dict(kind="war_end", tick=self.tick, initiator=a, victim=b, reason=reason, goal=self.wars[key]["goal"]))
+        del self.wars[key]
+        pair = tuple(sorted(key))
+        until = self.tick + self.p.war_truce
+        self.truce[pair] = until
+        self.rec(8, "08b", f"truce.{pair[0]}-{pair[1]}", 0, until, "TRUCE")
+
+    def war_step(self):
+        """Фаза 8, после knowledge_step. Порядок: перемирия → конец войн → цена → накопление и объявления (spec 08b §1)."""
+        p = self.p
+        if not self.p.relations_enabled:
+            raise ValueError("wars_enabled требует relations_enabled (нужен H из 08a)")
+        if p.war_needs_motive and not p.knowledge_enabled:
+            raise ValueError("war_needs_motive требует knowledge_enabled (нужен мотив из 08c)")
+        for pair, until in sorted(self.truce.items()):
+            if until <= self.tick:
+                self.rec(8, "08b", f"truce.{pair[0]}-{pair[1]}", until, 0, "TRUCE_END")
+                del self.truce[pair]
+        for key in sorted(self.wars):
+            a, b = key
+            w = self.wars[key]
+            fa, fb = self.factions[a], self.factions[b]
+            owner = self.site(w["goal"]).owner
+            days = self.tick - w["start"]
+            if owner == a:
+                self._war_end(key, "WAR_END_GOAL")
+            elif owner != b:
+                self._war_end(key, "WAR_END_GOAL_LOST")
+            elif days >= p.war_grace and fb.manpower <= p.war_broken_share * w["mp0"][b]:
+                self._war_end(key, "WAR_END_BROKEN")
+            elif days >= p.war_grace and fa.manpower <= p.war_exhausted_share * w["mp0"][a]:
+                self._war_end(key, "WAR_END_EXHAUSTED")
+            elif days >= p.war_max_days:
+                self._war_end(key, "WAR_END_TIMEOUT")
+        for key in sorted(self.wars):
+            if self.wars[key]["start"] == self.tick:
+                continue
+            for name in key:
+                f = self.factions[name]
+                pay = min(p.war_cost, f.supply)
+                if pay > 0:
+                    self.setf(f, "supply", f.supply - pay, 8, "06", "WAR_COST")
+        for a in sorted(self.factions):
+            for b in sorted(self.factions):
+                if a == b:
+                    continue
+                fa, fb = self.factions[a], self.factions[b]
+                pair = tuple(sorted((a, b)))
+                if fa.manpower == 0 or fb.manpower == 0 or fa.archetype not in p.archetype_assault_threshold:
+                    continue
+                if fa.armory < p.assault_armory_min or fa.days_supply < p.war_min_dos:
+                    continue
+                if (a, b) in self.wars or (b, a) in self.wars or pair in self.truce:
+                    continue
+                h = self.rel_h(a, b)
+                if h < p.rel_level_cuts[2]:
+                    continue
+                goal = self._war_goal(a, b)
+                if goal is None:
+                    continue
+                acc = self.war_acc.get((a, b), 0.0)
+                if acc < 100.0:
+                    add = min(p.war_chance_cap, p.war_chance_base + p.war_chance_slope * (h - p.rel_level_cuts[2]))
+                    self.war_acc[(a, b)] = acc + add
+                    self.rec(8, "08b", f"war.{a}>{b}.acc", acc, acc + add, "WAR_ACC")
+                    acc += add
+                if acc < 100.0:
+                    continue
+                if self.tick - self.last_war_tick < p.war_world_gap:
+                    continue
+                if self._war_count(a) >= p.war_max_per_faction or self._war_count(b) >= p.war_max_per_faction:
+                    continue
+                self.war_acc[(a, b)] = acc - 100.0
+                self.rec(8, "08b", f"war.{a}>{b}.acc", acc, acc - 100.0, "WAR_ACC")
+                self.wars[(a, b)] = dict(start=self.tick, goal=goal.name, mp0={a: fa.manpower, b: fb.manpower})
+                self.last_war_tick = self.tick
+                self.rec(8, "08b", f"war.{a}>{b}.goal", None, goal.name, "WAR_DECLARED")
+                self.rec(8, "08b", f"war.{a}>{b}.state", 0, 1, "WAR_DECLARED")
+                self.events.append(dict(kind="war_declared", tick=self.tick, initiator=a, victim=b, goal=goal.name))
