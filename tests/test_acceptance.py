@@ -6,14 +6,15 @@
 2026-10-25: добавлены IC1, IC2, IC3, IC5, R7, R8 по утверждённому plan 06, шаг 5; пометка «известный дефект» с DS4 снята — DS4 стал зелёным (см. отчёт 06; указание в самой пометке).
 2026-10-25: добавлены HD1–HD3, R5, R6; критерий RG4 переписан (люди ≥ 95, мораль < 55); счёт людей включает изгнанных — по утверждённому plan 05, шаг 5 (решение Стана: порог морали 55, RG4 вариант а).
 2026-10-26: добавлены RP1, RP2 и обратная проверка R11 по утверждённому plan 07, шаг 3 (решения Стана: границы RP1 5–10; налёт на регион без потерь).
-2026-10-26: добавлены RT1–RT4, RT2b, обратные R12–R15, регрессия «tiers_enabled = False», инвариант ярусов RT5 и проверка ступеней снаряжения по утверждённому plan 04, шаг 7 (решения Стана: ярусы 70/20/10, срочная реорганизация 3 тика)."""
+2026-10-26: добавлены RT1–RT4, RT2b, обратные R12–R15, регрессия «tiers_enabled = False», инвариант ярусов RT5 и проверка ступеней снаряжения по утверждённому plan 04, шаг 7 (решения Стана: ярусы 70/20/10, срочная реорганизация 3 тика).
+2026-10-26: добавлены RL1–RL6, обратные R16–R18 и проверка «модуль 08 только читает» по утверждённому plan 08a, шаги 6–7 (решения Стана: обида направленная, претензии вынесены в заявку 08c, вес штурма через паузу)."""
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -87,3 +88,12 @@ def test_gear_step_by_tier():
     assert [w.gear_step(f, t) for t in ("rank", "vet", "off")] == ["Worn", "Good", "Good"]
     f.armory = 12.0
     assert [w.gear_step(f, t) for t in ("rank", "vet", "off")] == ["Rags", "Rags", "Worn"]
+
+
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith("RL")])
+def test_relations_read_only(sc):
+    """spec 08a: при relations_enabled = True журнал без строк модуля 08 совпадает с журналом при False (модуль только читает)."""
+    from dataclasses import replace
+    off, _ = run(sc, replace(Params(), relations_enabled=False))
+    on, _ = run(sc, replace(Params(), relations_enabled=True))
+    assert [r for r in on.log if r[2] != "08"] == off.log

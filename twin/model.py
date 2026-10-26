@@ -74,6 +74,21 @@ class Faction:
         return (w[0] * self.steady + w[1] * self.ordinary + w[2] * self.skittish) / self.manpower
 
 
+LEVELS = ("Ally", "Neutral", "Neutral+tension", "Enemy", "Archnemesis")  # уровни 08 [док 08]
+
+
+@dataclass
+class Relation:
+    """Обида пострадавшего к обидчику (spec 08a): запись пары (victim -> offender)."""
+    base: float                                    # база на момент регистрации (для журнала)
+    g_target: float = 0.0                          # цель затухающей части
+    g: float = 0.0                                 # текущая затухающая часть
+    b: float = 0.0                                 # «предательство», не затухает
+    taken: list = field(default_factory=list)      # объекты, которые обидчик взял штурмом у пострадавшего
+    h: float = 0.0                                 # последний записанный H
+    level: str = ""                                # последний записанный уровень
+
+
 @dataclass
 class World:
     factions: dict
@@ -86,6 +101,8 @@ class World:
     forced_raids: dict = field(default_factory=dict)     # tick -> [(attacker, site_name)] принудительные налёты на объект (spec 03c)
     scheduled: dict = field(default_factory=dict)        # tick -> [callable(world)]
     regions: dict = field(default_factory=dict)          # имя региона -> Достаток (06); "common" — один регион на всех
+    rel: dict = field(default_factory=dict)              # (пострадавший, обидчик) -> Relation (spec 08a)
+    rel_cursor: int = 0                                  # сколько событий из events уже учтено фазой 8
 
     @property
     def prosperity(self) -> float:
@@ -467,6 +484,9 @@ class World:
             self.decide_assault(f)
         for f in fs:
             self.raid(f)
+        # фаза 8 — отношения и обида (spec 08a): только читает события тика, ничего не меняет в других модулях
+        if self.p.relations_enabled:
+            self.relations_step()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
@@ -759,3 +779,97 @@ class World:
             site=s.name, attacker_wins=attacker_wins, ratio=ratio,
             losses={lose.name: kl, win.name: kw}, manpower_before=mp_before, shock_inc=sh,
             supply_moved=moved_supply))
+
+    # ---------- 08a: отношения и обида ----------
+    def base_h(self, a: str, b: str) -> float:
+        """База H(A→B): слой 1 из 08 по осям архетипов. Слой 2 («конкуренция») в двойнике не реализован (spec 08a §6)."""
+        p = self.p
+        ea, ia, la = p.rel_axes[self.factions[a].archetype]
+        lb = p.rel_axes[self.factions[b].archetype][2]
+        w_exp, w_ins, w_leg, w_ill = p.rel_weights
+        h = w_exp * ea + w_ins * ia
+        if lb > 0:
+            h += w_leg * la
+        elif la >= 1:
+            h += w_ill
+        return h
+
+    def level_of(self, h: float) -> str:
+        """Уровень по H: границы полуинтервалами [док 08]."""
+        c1, c2, c3, c4 = self.p.rel_level_cuts
+        if h < c1:
+            return LEVELS[0]
+        if h < c2:
+            return LEVELS[1]
+        if h < c3:
+            return LEVELS[2]
+        if h < c4:
+            return LEVELS[3]
+        return LEVELS[4]
+
+    def rel_h(self, a: str, b: str) -> float:
+        """H(A→B) = база + g + b; для пары без записи обиды нет."""
+        r = self.rel.get((a, b))
+        return self.base_h(a, b) + (r.g + r.b if r else 0.0)
+
+    def _register(self, victim: str, offender: str) -> Relation:
+        """Пара регистрируется при первом событии между фракциями [док 08]."""
+        r = self.rel.get((victim, offender))
+        if r is None:
+            base = self.base_h(victim, offender)
+            r = self.rel[(victim, offender)] = Relation(base=base, h=base, level=self.level_of(base))
+            self.rec(8, "08", f"rel.{victim}>{offender}.registered", 0, 1, "REL")
+        return r
+
+    def betray(self, betrayer: str, victim: str):
+        """Сценарный вход: A нарушила труа с B. b(B→A) += betrayal сразу, мимо потолка и лимита толчка, не затухает.
+        Труа в двойнике нет, вызов только из сценариев."""
+        if not self.p.relations_enabled:
+            return
+        r = self._register(victim, betrayer)
+        old = r.b
+        r.b += self.p.betrayal
+        self.rec(8, "08", f"rel.{victim}>{betrayer}.b", old, r.b, "GRUDGE")
+
+    def relations_step(self):
+        """Фаза 8. Порядок: события тика → потолок → захват → лимит толчка → затухание → пересчёт H и уровней."""
+        p = self.p
+        new_events = self.events[self.rel_cursor:]
+        self.rel_cursor = len(self.events)
+        for e in new_events:
+            if e.get("kind") not in ("raid_object", "assault"):
+                continue
+            victim, offender = e["defender"], e["attacker"]
+            if victim == offender or victim not in self.factions or offender not in self.factions:
+                continue
+            r = self._register(victim, offender)
+            old = r.g_target
+            r.g_target = min(p.grudge_cap, r.g_target + p.grudge_event)
+            self.rec(8, "08", f"rel.{victim}>{offender}.g_target", old, r.g_target, "GRUDGE")
+            if e["kind"] == "assault" and e["attacker_wins"] and e["site"] not in r.taken:
+                r.taken.append(e["site"])
+        for (victim, offender), r in self.rel.items():
+            old = r.g
+            if r.g < r.g_target:
+                r.g = min(r.g_target, r.g + p.grudge_push)
+            elif r.g > r.g_target:
+                r.g = max(r.g_target, r.g - p.grudge_push)
+            self.rec(8, "08", f"rel.{victim}>{offender}.g", old, r.g, "GRUDGE")
+        if self.tick % p.grudge_decay_every == 0:
+            for (victim, offender), r in self.rel.items():
+                if r.g_target <= 0:
+                    continue
+                r.taken = [s for s in r.taken if self.site(s).owner == offender]
+                alive = p.grudge_pause and bool(r.taken)
+                self.events.append(dict(kind="grudge_decay", tick=self.tick, victim=victim, offender=offender, applied=not alive))
+                if not alive:
+                    old = r.g_target
+                    r.g_target = max(0.0, r.g_target - p.grudge_decay_step)
+                    self.rec(8, "08", f"rel.{victim}>{offender}.g_target", old, r.g_target, "GRUDGE")
+        self.rel_cursor = len(self.events)
+        for (victim, offender), r in self.rel.items():
+            h = self.base_h(victim, offender) + r.g + r.b
+            lvl = self.level_of(h)
+            self.rec(8, "08", f"rel.{victim}>{offender}.H", r.h, h, "REL")
+            self.rec(8, "08", f"rel.{victim}>{offender}.level", r.level, lvl, "REL")
+            r.h, r.level = h, lvl

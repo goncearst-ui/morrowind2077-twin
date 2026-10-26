@@ -31,6 +31,9 @@ def faction(world_p, name, arche, n, dos, site_cost):
     return f
 
 
+RL_SCENARIOS = ("RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
+
+
 SOLO = {  # spec 03a: (уклад, численность, объекты)
     "RG2": ("Контролёры", 60, ("Перевал",)),
     "RG3": ("Хранители", 100, ("Перевал", "Насосная")),
@@ -176,6 +179,51 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         a = faction(p, "A", arche, n, 20, sum(x.base_cost for x in ss if x.name in names))
         w = World({"A": a}, ss, p)
         horizon = 200
+    elif sc in RL_SCENARIOS:
+        # spec 08a: чистая обстановка как у RD и RT, отношения включены; налёты и штурмы только принудительные
+        p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, decisions_enabled=False, relations_enabled=True,
+                    archetype_assault_threshold={})   # автономных штурмов нет, только принудительные
+        if sc == "RL1":
+            # по две фракции на каждый уклад: 16 ячеек таблицы 08, включая диагональ
+            fs = {}
+            for arche, pre in (("Хранители", "Хр"), ("Хищники", "Хщ"), ("Контролёры", "К"), ("Дрейфующие", "Д")):
+                for k in (1, 2):
+                    n = f"{pre}{k}"
+                    fs[n] = faction(p, n, arche, 30, 20, 0)
+            w = World(fs, [], p)
+            horizon = 1
+        elif sc == "RL6":
+            ss = sites3()
+            ss[0].owner, ss[1].owner, ss[2].owner = "К", "Х", "П"
+            fs = {"Х": faction(p, "Х", "Хранители", 60, 60, 20),
+                  "К": faction(p, "К", "Контролёры", 60, 60, 40),
+                  "П": faction(p, "П", "Хищники", 90, 60, 20)}
+            w = World(fs, ss, p)
+            w.forced_raids = {5: [("Х", "Перевал")], 40: [("П", "Насосная")], 90: [("К", "Жила")],
+                              120: [("Х", "Перевал")]}
+            horizon = 200
+        else:
+            ss = sites3()
+            for x in ss:
+                x.owner = "B"
+            a = faction(p, "A", "Хищники", 90, 60, 0)
+            b = faction(p, "B", "Хранители", 100 if sc == "RL3" else 60, 60, 40)
+            w = World({"A": a, "B": b}, ss, p)
+            if sc in ("RL2", "RL5"):
+                w.forced_raids = {5: [("A", "Перевал"), ("A", "Насосная"), ("A", "Жила")]}
+                horizon = 9
+            elif sc == "RL3":
+                w.forced_raids = {t: [("A", "Перевал")] for t in (2, 6, 10, 14, 18)}
+                w.scheduled = {20: [lambda w: w.betray("A", "B")]}
+                horizon = 200
+            elif sc == "RL4a":
+                w.forced_raids = {5: [("A", "Перевал")]}
+                horizon = 80
+            else:  # RL4b: штурм с захватом на тике 5, сценарный возврат на тике 101 (после затухания тика 100)
+                w.forced_assaults = {5: [("A", "Перевал")]}
+                w.scheduled = {101: [lambda w: setattr(w.site("Перевал"), "owner", "B")]}
+                horizon = 130
     else:
         raise ValueError(sc)
     for f in w.factions.values():
@@ -509,6 +557,88 @@ def check(sc: str, w: World, series):
                         f"в конце {a['end']} чел., мораль {f.morale:.1f}, порог {p.decision_morale_threshold:.0f}"))
         if sc == "RG5":
             res.append(("голод не отменён: без объектов фракция тает", a["end"] < a["start"], f"{a['start']} → {a['end']} чел."))
+    elif sc in RL_SCENARIOS:
+        def rows(target):
+            return [(r[0], r[4], r[5]) for r in w.log if r[3] == target]
+        lv = w.level_of
+        if sc == "RL1":
+            table = {"Хранители": {"Хранители": -2.0, "Хищники": 2.0, "Контролёры": -2.0, "Дрейфующие": 2.0},
+                     "Хищники": {k: 5.5 for k in ("Хранители", "Хищники", "Контролёры", "Дрейфующие")},
+                     "Контролёры": {"Хранители": 2.5, "Хищники": 5.5, "Контролёры": 2.5, "Дрейфующие": 5.5},
+                     "Дрейфующие": {k: 0.0 for k in ("Хранители", "Хищники", "Контролёры", "Дрейфующие")}}
+            pre = {"Хранители": "Хр", "Хищники": "Хщ", "Контролёры": "К", "Дрейфующие": "Д"}
+            bad = []
+            for a, row in table.items():
+                for b, exp in row.items():
+                    fa = pre[a] + "1"
+                    fb = pre[b] + ("2" if a == b else "1")
+                    got = w.rel_h(fa, fb)
+                    if abs(got - exp) > 1e-9:
+                        bad.append(f"{a}→{b}: {got} вместо {exp}")
+            res.append(("16 ячеек слоя 1 совпадают с таблицей 08", not bad, "расхождения: " + "; ".join(bad) if bad else "все 16 ячеек совпали"))
+            res.append(("до первого события записей обиды нет", not w.rel and not [r for r in w.log if r[2] == "08"], f"пар {len(w.rel)}"))
+        elif sc == "RL2":
+            ev = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("сценарий валиден: три налёта на тике 5", len(ev) == 3 and all(e["tick"] == 5 for e in ev), f"налётов {len(ev)}"))
+            gt = rows("rel.B>A.g_target")
+            res.append(("g_target = 4.0 (потолок), а не 9.0", gt and max(x[2] for x in gt) == 4.0, f"g_target макс. {max([x[2] for x in gt] or [0])}"))
+            g = {t: new for t, old, new in rows("rel.B>A.g")}
+            seq = [g.get(t) for t in (5, 6, 7, 8)]
+            res.append(("g на тиках события и следующих трёх = 1 / 2 / 3 / 4", seq == [1.0, 2.0, 3.0, 4.0], f"g: {seq}"))
+            jump = max([abs(new - old) for t, old, new in rows("rel.B>A.g")] or [0])
+            res.append(("ни в одном тике |Δg| не больше 1.0", jump <= p.grudge_push + 1e-9, f"максимальный сдвиг {jump}"))
+        elif sc == "RL3":
+            ev = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("сценарий валиден: пять налётов за 20 тиков", len(ev) == 5 and max(e["tick"] for e in ev) <= 20, f"налётов {len(ev)}"))
+            gt = rows("rel.B>A.g_target")
+            top = max([x[2] for x in gt] or [0])
+            res.append(("g_target ≤ 4.0 на каждом тике", top <= 4.0 + 1e-9, f"максимум {top}"))
+            res.append(("потолок действительно сработал (проверка не пустая)", top == 4.0, f"максимум {top}"))
+            b = rows("rel.B>A.b")
+            res.append(("после betray b = 6.0 сразу", b[:1] == [(20, 0.0, 6.0)], f"строки b: {b}"))
+            res.append(("b = 6.0 на тике 200, не затухало", len(b) == 1 and w.rel[("B", "A")].b == 6.0 and w.tick == 200, f"b на тике {w.tick}: {w.rel[('B', 'A')].b}"))
+        elif sc == "RL4a":
+            ev = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("сценарий валиден: один налёт без захвата", len(ev) == 1 and ev[0]["tick"] == 5 and not [e for e in w.events if e["kind"] == "assault"], f"налётов {len(ev)}"))
+            got = {t: new for t, old, new in rows("rel.B>A.g_target") if t > 5}
+            exp = {10: 2.5, 20: 2.0, 30: 1.5, 40: 1.0, 50: 0.5, 60: 0.0}
+            res.append(("g_target 3.0 → 0 шагами по 0.5 на тиках 10, 20, … 60", got == exp and rows("rel.B>A.g_target")[0][2] == 3.0, f"шаги: {got}"))
+        elif sc == "RL4b":
+            ev = [e for e in w.events if e["kind"] == "assault"]
+            res.append(("сценарий валиден: штурм с захватом на тике 5", len(ev) == 1 and ev[0]["attacker_wins"] and ev[0]["tick"] == 5, f"штурмов {len(ev)}"))
+            gt = rows("rel.B>A.g_target")
+            res.append(("g_target = 3.0 на всех тиках 5…100", [x for x in gt if x[0] <= 100] == [(5, 0.0, 3.0)], f"строки до тика 100: {[x for x in gt if x[0] <= 100]}"))
+            skipped = [e for e in w.events if e["kind"] == "grudge_decay" and not e["applied"]]
+            res.append(("шаги затухания на тиках 10…100 пропущены паузой", len(skipped) == 10 and skipped[-1]["tick"] == 100, f"пропущено шагов {len(skipped)}"))
+            after = [x for x in gt if x[0] > 100]
+            res.append(("после возврата объекта затухание возобновилось на тике 110 (−0.5)", after[:1] == [(110, 3.0, 2.5)], f"после тика 100: {after}"))
+        elif sc == "RL5":
+            res.append(("сценарий валиден: три налёта X на объекты D", len([e for e in w.events if e["kind"] == "raid_object"]) == 3, ""))
+            hb, ha = w.rel_h("B", "A"), w.rel_h("A", "B")
+            res.append(("H(пострадавший→обидчик) = база + g", abs(hb - (w.base_h("B", "A") + w.rel[("B", "A")].g)) < 1e-9 and w.rel[("B", "A")].g == 4.0,
+                        f"H(B→A) = {hb}, база {w.base_h('B', 'A')}, g {w.rel[('B', 'A')].g}"))
+            res.append(("H(обидчик→пострадавший) равен базе, записи пары нет", abs(ha - w.base_h("A", "B")) < 1e-9 and ("A", "B") not in w.rel and not rows("rel.A>B.H"),
+                        f"H(A→B) = {ha}, база {w.base_h('A', 'B')}"))
+        elif sc == "RL6":
+            names = list(w.factions)
+            pairs = [(a, b) for a in names for b in names if a != b]
+            hend = {pr: w.rel_h(*pr) for pr in pairs}
+            res.append(("на тике 200 есть направленная пара с H < 5", any(h < 5.0 for h in hend.values()), f"пар с H < 5: {sum(1 for h in hend.values() if h < 5.0)} из {len(pairs)}"))
+            crossed = []
+            for a, b in pairs:
+                seq = rows(f"rel.{a}>{b}.H")
+                up = next((t for t, old, new in seq if new >= 5.0), None)
+                if up is None:
+                    continue
+                down = next((t for t, old, new in seq if t > up and new < 5.0), None)
+                if down is None:
+                    continue
+                dec = [e for e in w.events if e["kind"] == "grudge_decay" and e["victim"] == a and e["offender"] == b and e["applied"] and up < e["tick"] <= down]
+                if dec:
+                    crossed.append(f"{a}→{b}: выше линии на тике {up}, ниже на тике {down}")
+            res.append(("пара поднялась через H = 5 и вернулась ниже линии затуханием", bool(crossed), "; ".join(crossed) or "таких пар нет"))
+            diff = [f"{a}→{b} {lv(hend[(a, b)])} / {b}→{a} {lv(hend[(b, a)])}" for a, b in pairs if a < b and lv(hend[(a, b)]) != lv(hend[(b, a)])]
+            res.append(("есть пара с H(A→B) и H(B→A) в разных уровнях", bool(diff), "; ".join(diff) or "таких пар нет"))
     return res, m
 
 
@@ -534,4 +664,7 @@ REVERSE = {
     "R13": (replace(Params(), underpay_morale=0.0), ("RT3",), "недоплата не роняет мораль"),
     "R14": (replace(Params(), tier_pay_weight=(1.0, 1.0, 1.0)), ("RT4",), "веса выплаты по ярусам 1 / 1 / 1"),
     "R15": (replace(Params(), reorg_ticks_urgent=10), ("RT2b",), "срочной реорганизации нет (3 тика заменены на 10)"),
+    "R16": (replace(Params(), grudge_push=1e9), ("RL2",), "лимит толчка обиды выключен"),
+    "R17": (replace(Params(), grudge_cap=1e9), ("RL3",), "потолок обиды выключен"),
+    "R18": (replace(Params(), grudge_pause=False), ("RL4b",), "пауза затухания выключена"),
 }
