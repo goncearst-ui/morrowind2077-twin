@@ -153,5 +153,8 @@ class Params:
     war_max_days: int = 20                         # срок войны, «сдались» [enRAGE]
     war_truce: int = 4                             # тиков запрета новой войны пары после конца [enRAGE: 3–5]
 
+    # --- 08d война направляет нападения (spec 08d) ---
+    war_steers_attacks: bool = False               # False = нападения как до 08d (регрессия строка в строку) [предл]
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

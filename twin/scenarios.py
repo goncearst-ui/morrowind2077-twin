@@ -34,6 +34,7 @@ def faction(world_p, name, arche, n, dos, site_cost):
 
 RL_SCENARIOS = ("RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
 MK_SCENARIOS = ("MK1", "MK2", "MK3", "MK4", "MK5", "MK6")
+WS_SCENARIOS = ("WS1", "WS2", "WS3")
 WR_SCENARIOS = ("WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d")
 
 
@@ -307,6 +308,30 @@ def build(sc: str, p: Params) -> tuple[World, int]:
                 w.forced_assaults = {25: [("A", "Перевал")]}
             elif sc == "WR7d":
                 w.forced_assaults = {25: [("C", "Перевал")]}
+    elif sc in WS_SCENARIOS:
+        # spec 08d: обстановка WR; до тика 20 автономные нападения выключены, на тике 20 сценарная команда их включает.
+        # war_steers_attacks включает run() (для WS по умолчанию True); обратные проверки передают False явно.
+        p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, decisions_enabled=False, relations_enabled=True,
+                    knowledge_enabled=True, wars_enabled=True, assault_dos=0.0, raids_enabled=False)
+        a = faction(p, "A", "Хищники", 90, 9.9, 0)
+        rudnik = Site("Рудник", 0, 90 * p.per_head_cost * p.archetype_cost_mult["Хищники"], 1)
+        rudnik.owner = "A"
+        ss = [rudnik] + sites()
+        if sc == "WS2":
+            ss[1].owner, ss[2].owner = "B", "C"
+            fs = {"A": a, "B": faction(p, "B", "Хранители", 150, 60, 40), "C": faction(p, "C", "Хранители", 30, 60, 15)}
+            known = ("Перевал",)
+            on = dict(assault_dos=10.0)
+        else:
+            ss[1].owner = ss[2].owner = "B"
+            fs = {"A": a, "B": faction(p, "B", "Хранители", 60, 60, 55)}
+            known = ("Насосная",)
+            on = dict(assault_dos=10.0) if sc == "WS1" else dict(raids_enabled=True, object_raids_enabled=True)
+        w = World(fs, ss, p)
+        w.known_at_start = {"A": known}
+        w.scheduled = {20: [lambda w: setattr(w, "p", replace(w.p, **on))]}
+        horizon = 21
     else:
         raise ValueError(sc)
     for f in w.factions.values():
@@ -315,7 +340,10 @@ def build(sc: str, p: Params) -> tuple[World, int]:
 
 
 def run(sc: str, p: Params | None = None):
-    p = p or Params()
+    if p is None:
+        p = Params()
+        if sc in WS_SCENARIOS:
+            p = replace(p, war_steers_attacks=True)   # spec 08d: по умолчанию сценарии WS идут с управлением; обратные проверки передают False явно
     w, horizon = build(sc, p)
     series = {n: [(0, f.manpower)] for n, f in w.factions.items()}
     for _ in range(horizon):
@@ -817,6 +845,28 @@ def check(sc: str, w: World, series):
                 res.append(("сценарий валиден: принудительный штурм на тике 25 с победой атакующего", len(att) == 1 and att[0]["tick"] == 25 and att[0]["attacker_wins"],
                             f"штурмы: {[(e['tick'], e['attacker'], e['attacker_wins']) for e in att]}"))
             res.append((f"война закрыта на тике 25, {reason}", st == [(19, 0, 1, "WAR_DECLARED"), (25, 1, 0, reason)], f"строки state: {st}"))
+    elif sc in WS_SCENARIOS:
+        wa = [e for e in w.events if e["kind"] == "war_attack"]
+        st = [(r[0], r[4], r[5], r[6]) for r in w.log if r[3] == "war.A>B.state"]
+        if sc == "WS1":
+            asl = [e for e in w.events if e["kind"] == "assault"]
+            res.append(("первый автономный штурм: тик 20, «Насосная», победа A",
+                        bool(asl) and (asl[0]["tick"], asl[0]["site"], asl[0]["attacker_wins"], asl[0]["forced"]) == (20, "Насосная", True, False),
+                        f"штурмы: {[(e['tick'], e['site'], e['attacker_wins']) for e in asl]}"))
+            res.append(("война закрыта на тике 20 причиной WAR_END_GOAL", st == [(19, 0, 1, "WAR_DECLARED"), (20, 1, 0, "WAR_END_GOAL")], f"строки state: {st}"))
+        elif sc == "WS2":
+            asl = [e for e in w.events if e["kind"] == "assault"]
+            res.append(("первый автономный штурм A: тик 20, «Насосная» у C (цель «Перевал» не по силам)",
+                        bool(asl) and (asl[0]["tick"], asl[0]["site"], asl[0]["defender"]) == (20, "Насосная", "C"),
+                        f"штурмы: {[(e['tick'], e['site'], e['defender']) for e in asl]}"))
+            res.append(("управление не сработало: событий war_attack нет", not wa, f"war_attack: {len(wa)}"))
+            res.append(("война A→B действует на тике 21, цель «Перевал»", ("A", "B") in w.wars and w.wars[("A", "B")]["goal"] == "Перевал", f"войны: {sorted(w.wars)}"))
+        else:
+            rd = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("первый налёт на объект: тик 20, «Насосная» (цель войны)",
+                        bool(rd) and (rd[0]["tick"], rd[0]["site"], rd[0]["forced"]) == (20, "Насосная", False),
+                        f"налёты: {[(e['tick'], e['site']) for e in rd]}"))
+            res.append(("событие war_attack вида «налёт» на тике 20", [(e["tick"], e["attack"]) for e in wa] == [(20, "raid")], f"war_attack: {[(e['tick'], e['attack']) for e in wa]}"))
     return res, m
 
 
@@ -856,4 +906,6 @@ REVERSE = {
     "R27": (replace(Params(), war_max_days=1000), ("WR6",), "срок войны не ограничен"),
     "R28": (replace(Params(), war_broken_share=0.0), ("WR7a",), "конец «сломлены» выключен"),
     "R29": (replace(Params(), war_exhausted_share=0.0), ("WR7b",), "конец «выдохлись» выключен"),
+    "R30": (replace(Params(), war_steers_attacks=False), ("WS1",), "война не направляет штурм (выбор цели как до 08d)"),
+    "R31": (replace(Params(), war_steers_attacks=False), ("WS3",), "война не направляет налёт (выбор цели как до 08d)"),
 }

@@ -451,6 +451,8 @@ class World:
     # ---------- тик ----------
     def step(self):
         self.tick += 1
+        if self.p.war_steers_attacks and not self.p.wars_enabled:
+            raise ValueError("war_steers_attacks требует wars_enabled (нужна цель войны из 08b)")
         for fn in self.scheduled.get(self.tick, []):
             fn(self)
         fs = list(self.factions.values())
@@ -513,6 +515,11 @@ class World:
         if self.tick - f.last_raid < p.raid_cooldown:
             return
         if p.object_raids_enabled and f.last_assault != self.tick:
+            goal = self._steer_goal(f)   # spec 08d: сначала цель войны
+            if goal is not None and self.visible_power(f) / max(1e-9, self.visible_power(self.factions[goal.owner]) * p.defense_factor) > p.raid_object_threshold:
+                self._war_attack(f, goal, "raid")
+                self.raid_object(f, goal, forced=False)
+                return
             targets = [s for s in self.sites if s.owner not in (None, f.name) and self.factions[s.owner].manpower > 0]
             for s in sorted(targets, key=lambda s: (-s.yield_, s.name)):
                 d = self.factions[s.owner]
@@ -741,6 +748,13 @@ class World:
             return
         if self.tick - f.last_assault < p.assault_cooldown:
             return
+        goal = self._steer_goal(f)   # spec 08d: сначала цель войны
+        if goal is not None:
+            d = self.factions[goal.owner]
+            if self.visible_power(f) / max(1e-9, self.visible_power(d) * p.defense_factor) > thr:
+                self._war_attack(f, goal, "assault")
+                self.assault(f, goal, forced=False)
+                return
         targets = [s for s in self.sites if s.owner not in (None, f.name)]
         for s in sorted(targets, key=lambda s: (-s.yield_, s.name)):
             d = self.factions[s.owner]
@@ -748,6 +762,20 @@ class World:
             if ratio > thr:
                 self.assault(f, s, forced=False)
                 return
+
+    def _steer_goal(self, f: Faction):
+        """Spec 08d: цель действующей войны, где f — зачинщик, если объект ещё у защитника; иначе None."""
+        if not (self.p.wars_enabled and self.p.war_steers_attacks):
+            return None
+        for (a, b), w in sorted(self.wars.items()):
+            if a == f.name:
+                s = self.site(w["goal"])
+                if s.owner == b and self.factions[b].manpower > 0:
+                    return s
+        return None
+
+    def _war_attack(self, f: Faction, s: Site, kind: str):
+        self.events.append(dict(kind="war_attack", tick=self.tick, initiator=f.name, victim=s.owner, site=s.name, attack=kind))
 
     # ---------- 13: разрешение штурма ----------
     def assault(self, a: Faction, s: Site, forced: bool):
