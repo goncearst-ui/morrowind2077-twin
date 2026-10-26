@@ -81,6 +81,25 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World({"A": a, "B": b}, ss, p)
         w.forced_assaults = {5: [("A", "Перевал")]}
         horizon = 55
+    elif sc in ("RD1", "RD2", "RD3", "RD3S", "RD4"):
+        # spec 03c: принудительный налёт A (Хищники 90) на объект B на тике 5; автономные налёты и каналы выключены для чистоты
+        p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, decisions_enabled=False)
+        ss = sites()
+        if sc == "RD1":
+            ss[1].owner = "B"
+            b = faction(p, "B", "Хранители", 30, 2, 15)      # запас мал: добыча ограничена запасом
+            target = "Насосная"
+        else:
+            ss[0].owner = "B"
+            b = faction(p, "B", "Хищники" if sc == "RD3S" else "Хранители", 60, 20, 40)
+            target = "Перевал"
+        a = faction(p, "A", "Хищники", 90, 20, 0)
+        if sc in ("RD3", "RD3S"):
+            a.morale = 20.0                                   # ниже порога «несём своих»
+        w = World({"A": a, "B": b}, ss, p)
+        w.forced_raids = {5: [("A", target)]}
+        horizon = 30
     elif sc in ("IC1", "IC2"):
         # spec 06: Дрейфующие 30 без объектов, 200 тиков (контрабанда: потолок рынка, Heat)
         a = faction(p, "A", "Дрейфующие", 30, 20, 0)
@@ -249,6 +268,60 @@ def check(sc: str, w: World, series):
                     f"Достаток RA {ra:.1f}, RB {rb:.1f}, одиночка (RG1) {solo_end:.1f}"))
         raids = [e for e in w.events if e["kind"] == "raid"]
         res.append(("грабили обе фракции", {e["faction"] for e in raids} == {"A", "B"}, f"налётов: {len(raids)}"))
+    elif sc in ("RD1", "RD2", "RD3", "RD3S", "RD4"):
+        ev = next(e for e in w.events if e["kind"] == "raid_object" and e["forced"])
+        A, B = w.factions["A"], w.factions["B"]
+        load = p.wounded_load * p.carry_unit
+        if sc == "RD1":
+            res.append(("сценарий валиден: налётчики победили без потерь", ev["attacker_wins"] and ev["casualties"]["A"] == 0 and ev["stock"] < ev["capacity"],
+                        f"потери A {ev['casualties']['A']}, запас цели {ev['stock']:.0f}, ёмкость {ev['capacity']:.0f}"))
+            res.append(("добыча = min(запас объекта, ёмкость)", abs(ev["loot"] - min(ev["stock"], ev["capacity"])) < 1e-6, f"добыча {ev['loot']:.0f}"))
+            row = next((r for r in w.log if r[6] == "RAID_OBJECT" and r[3] == "B.supply"), None)
+            res.append(("запас обороны убыл ровно на добычу", row is not None and abs((row[4] - row[5]) - ev["loot"]) < 1e-3,
+                        f"запас B {row[4]:.0f} → {row[5]:.0f}" if row else "строки нет"))
+        elif sc == "RD2":
+            res.append(("сценарий валиден: у налётчиков есть раненые, мораль ≥ порога", ev["wounded"] > 0 and ev["morale_high"], f"раненых {ev['wounded']}, мораль высокая: {ev['morale_high']}"))
+            res.append(("раненых несут всех, брошенных нет", ev["carried"] == ev["wounded"] and ev["abandoned"] == 0 and A.captured == 0 and A.sold == 0,
+                        f"унесено {ev['carried']} из {ev['wounded']}, брошено {ev['abandoned']}, пленных {A.captured + A.sold}"))
+            res.append(("добыча = min(запас, ёмкость − место под раненых)", abs(ev["loot"] - min(ev["stock"], ev["capacity"] - ev["carried"] * load)) < 1e-6, f"добыча {ev['loot']:.0f}"))
+            w2, _ = run("RD3", p)
+            lo = next(e for e in w2.events if e["kind"] == "raid_object")
+            res.append(("добыча меньше, чем у низкоморальной группы", ev["loot"] < lo["loot"], f"{ev['loot']:.0f} против {lo['loot']:.0f}"))
+        elif sc in ("RD3", "RD3S"):
+            res.append(("сценарий валиден: мораль ниже порога, раненые есть", (not ev["morale_high"]) and ev["wounded"] > 0, f"мораль высокая: {ev['morale_high']}, раненых {ev['wounded']}"))
+            res.append(("добыча = min(запас, ёмкость), раненые брошены", abs(ev["loot"] - min(ev["stock"], ev["capacity"])) < 1e-6 and ev["abandoned"] > 0,
+                        f"добыча {ev['loot']:.0f}, брошено {ev['abandoned']}"))
+            if sc == "RD3":
+                res.append(("пленит Хранитель: люди приняты в skittish обороны", ev["fate"] == "absorbed" and B.absorbed == ev["abandoned"] and A.captured == ev["abandoned"] and B.sold == 0 and A.sold == 0,
+                            f"судьба {ev['fate']}, принято {B.absorbed}, захвачено у A {A.captured}"))
+                w2, _ = run("RD2", p)
+                hi = next(e for e in w2.events if e["kind"] == "raid_object")
+                res.append(("добыча больше, чем у высокоморальной группы", ev["loot"] > hi["loot"], f"{ev['loot']:.0f} против {hi['loot']:.0f}"))
+            else:
+                res.append(("пленит Хищник: люди проданы", ev["fate"] == "sold" and A.sold == ev["abandoned"] and A.captured == 0 and B.absorbed == 0,
+                            f"судьба {ev['fate']}, продано {A.sold}"))
+                row = next((r for r in w.log if r[6] == "PRISONER_SALE" and r[3] == "B.supply"), None)
+                res.append(("продавцу идёт цена за каждого", row is not None and abs((row[5] - row[4]) - p.prisoner_price * ev["abandoned"]) < 1e-3,
+                            f"+{row[5] - row[4]:.0f} запаса" if row else "строки нет"))
+            mrow = next((r for r in w.log if r[6] == "ABANDON" and r[3] == "A.morale"), None)
+            res.append(("мораль налётчиков упала за каждого брошенного",
+                        mrow is not None and abs((mrow[4] - mrow[5]) - min(mrow[4], p.abandon_morale_cost * ev["abandoned"])) < 1e-9,
+                        f"мораль A {mrow[4]:.1f} → {mrow[5]:.1f} за {ev['abandoned']} брошенных" if mrow else "строки нет"))
+        else:
+            mp = dict(series["A"])
+            t0 = ev["tick"]
+            res.append(("сценарий валиден: раненый унесён", ev["wounded"] > 0 and ev["carried"] > 0, f"раненых {ev['wounded']}, унесено {ev['carried']}"))
+            res.append(("раненые не входят в Manpower", mp[t0 + 1] == mp[t0 - 1] - ev["casualties"]["A"], f"Manpower A: {mp[t0 - 1]} → {mp[t0 + 1]}, выбыло {ev['casualties']['A']}"))
+            rec = [r for r in w.log if r[6] == "RECOVERY" and r[3] == "A.wounded"]
+            res.append(("возвращаются ровно через recovery_ticks", bool(rec) and rec[0][0] == t0 + p.recovery_ticks, "возврат на тике " + (str(rec[0][0]) if rec else "—")))
+            res.append(("вернулись в Manpower, ведро пусто", mp[t0 + p.recovery_ticks] == mp[t0 + p.recovery_ticks - 1] + ev["carried"] and A.wounded == 0,
+                        f"Manpower {mp[t0 + p.recovery_ticks - 1]} → {mp[t0 + p.recovery_ticks]}, раненых в конце {A.wounded}"))
+            e0 = w.expense(A)
+            A.wounded += 1
+            e1 = w.expense(A)
+            A.wounded -= 1
+            want = p.per_head_cost * p.archetype_cost_mult[A.archetype]
+            res.append(("раненый ест", abs((e1 - e0) - want) < 1e-9, f"+{e1 - e0:.2f} расхода за раненого, ожидалось {want:.2f}"))
     elif sc in ("IC1", "IC2"):
         rows = [r for r in w.log if r[6] == "SMUGGLING" and r[3] == "A.supply"]
         mp = dict(series["A"])
@@ -346,5 +419,7 @@ REVERSE = {
     "R5": (replace(Params(), decisions_enabled=False), ("HD1",), "решения при голоде выключены"),
     "R7": (replace(Params(), market_cap=1e9), ("IC1",), "потолок внешнего рынка выключен"),
     "R8": (replace(Params(), heat_per_income=0.0), ("IC2",), "Heat не растёт (внимание выключено)"),
+    "R9": (replace(Params(), wounded_share=0.0), ("RD2",), "раненых нет: все выбывшие гибнут"),
+    "R10": (replace(Params(), carry_morale_threshold=0.0), ("RD3",), "порядок «что несут» не зависит от морали (всегда высокая)"),
     "R6": (replace(Params(), peaceful_decide=("Хищники", "Контролёры", "Хранители")), ("HD3",), "Хранители принимают решения как Хищники"),
 }

@@ -9,7 +9,7 @@ from math import ceil, floor
 from .params import Params
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
-BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold")  # куда уходят люди; сумма с живыми = старт (§1)
+BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold", "captured")  # куда уходят люди; сумма с живыми = старт (§1)
 CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
 
@@ -50,6 +50,10 @@ class Faction:
     sold: int = 0                   # ведро «проданы» — торговля пленными, вне мира (spec 06)
     heat: float = 0.0               # внимание властей к контрабанде (spec 06)
     bust_until: int = 0             # до какого тика канал стоит после срыва
+    wounded: int = 0                # ведро «раненые» (spec 03c): едят, не воюют, не входят в Manpower
+    wounded_queue: list = field(default_factory=list)   # [тик возврата, ведро, число]
+    captured: int = 0               # брошенные раненые, попавшие в плен (выбыли из фракции)
+    absorbed: int = 0               # принятые пленные других фракций (прибавка к старту для сохранения людей)
 
     @property
     def manpower(self) -> int:
@@ -71,6 +75,7 @@ class World:
     log: list = field(default_factory=list)
     events: list = field(default_factory=list)   # события для метрик (штурмы, дезертирство, сдача)
     forced_assaults: dict = field(default_factory=dict)  # tick -> [(attacker, site_name)]
+    forced_raids: dict = field(default_factory=dict)     # tick -> [(attacker, site_name)] принудительные налёты на объект (spec 03c)
     scheduled: dict = field(default_factory=dict)        # tick -> [callable(world)]
     regions: dict = field(default_factory=dict)          # имя региона -> Достаток (06); "common" — один регион на всех
 
@@ -122,6 +127,42 @@ class World:
 
     def kill_many(self, f, n, phase, reason):
         return self._move(f, n, self.p.drain_order, "dead", phase, reason)
+
+    def wound_many(self, f: Faction, n: int, phase, reason) -> int:
+        """Выбывшие в раненые: порядок как у слива вёдер; запись в очередь выздоровления (spec 03c)."""
+        seq = ("skittish", "ordinary", "steady") if self.p.drain_order == "skittish_first" else ("steady", "ordinary", "skittish")
+        moved = 0
+        for b in seq:
+            if moved >= n:
+                break
+            take = min(getattr(f, b), n - moved)
+            if take:
+                self.setf(f, b, getattr(f, b) - take, phase, "03", reason)
+                f.wounded_queue.append([self.tick + self.p.recovery_ticks, b, take])
+                self.setf(f, "wounded", f.wounded + take, phase, "03", reason)
+                moved += take
+        return moved
+
+    def recover(self, f: Faction):
+        for e in [e for e in f.wounded_queue if e[0] <= self.tick]:
+            f.wounded_queue.remove(e)
+            self.setf(f, e[1], getattr(f, e[1]) + e[2], 1, "03", "RECOVERY")
+            self.setf(f, "wounded", f.wounded - e[2], 1, "03", "RECOVERY")
+
+    def drop_wounded(self, f: Faction, n: int, newest: bool, dest: str | None, phase, reason) -> int:
+        """Вывести n раненых из очереди (новейших — брошенные, старейших — изгнанные) в ведро dest."""
+        left = n
+        while left > 0 and f.wounded_queue:
+            e = f.wounded_queue[-1] if newest else f.wounded_queue[0]
+            take = min(left, e[2])
+            e[2] -= take
+            left -= take
+            if e[2] == 0:
+                f.wounded_queue.remove(e)
+            self.setf(f, "wounded", f.wounded - take, phase, "03", reason)
+            if dest:
+                self.setf(f, dest, getattr(f, dest) + take, phase, "03", reason)
+        return n - left
 
     def remove_many(self, f, n, phase, reason):
         return self._move(f, n, self.p.desertion_order, "deserted", phase, reason)
@@ -202,7 +243,7 @@ class World:
 
     def expense(self, f: Faction) -> float:
         base = sum(s.base_cost for s in self.owned(f))
-        return (base + f.manpower * self.p.per_head_cost) * self.p.archetype_cost_mult[f.archetype]
+        return (base + (f.manpower + f.wounded) * self.p.per_head_cost) * self.p.archetype_cost_mult[f.archetype]
 
     def publish_dos(self, f: Faction, phase=4):
         e = self.expense(f)
@@ -218,6 +259,8 @@ class World:
         # фаза 1 — затухание шока, восстановление региона
         for f in fs:
             self.setf(f, "shock", max(0.0, f.shock - self.p.shock_decay_per_tick), 1, "04", "DECAY")
+        for f in fs:
+            self.recover(f)
         for name in list(self.regions):
             self.set_region(name, self.regions[name] + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
@@ -246,6 +289,8 @@ class World:
             self.surrender(f)
         for atk_name, site_name in self.forced_assaults.get(self.tick, []):
             self.assault(self.factions[atk_name], self.site(site_name), forced=True)
+        for atk_name, site_name in self.forced_raids.get(self.tick, []):
+            self.raid_object(self.factions[atk_name], self.site(site_name), forced=True)
         for f in fs:
             self.decide_assault(f)
         for f in fs:
@@ -258,6 +303,13 @@ class World:
             return
         if self.tick - f.last_raid < p.raid_cooldown:
             return
+        if p.object_raids_enabled and f.last_assault != self.tick:
+            targets = [s for s in self.sites if s.owner not in (None, f.name) and self.factions[s.owner].manpower > 0]
+            for s in sorted(targets, key=lambda s: (-s.yield_, s.name)):
+                d = self.factions[s.owner]
+                if self.visible_power(f) / max(1e-9, self.visible_power(d) * p.defense_factor) > p.raid_object_threshold:
+                    self.raid_object(f, s, forced=False)
+                    return
         f.last_raid = self.tick
         loot = self.regions[f.home] * p.raid_yield
         to_pool = loot * (1 - p.share_rate[f.archetype])
@@ -265,6 +317,76 @@ class World:
         self.set_region(f.home, self.regions[f.home] - p.raid_cost, 7, "RAID")
         self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
                                 to_pool=to_pool, manpower=f.manpower))
+
+    def raid_object(self, a: Faction, s: Site, forced: bool):
+        """Spec 03c: налёт на объект. Бой как в штурме, но объект не захватывается; выбывшие частью ранены;
+        ёмкость и мораль группы решают, что несут; брошенные раненые попадают в плен по укладу обороны."""
+        p = self.p
+        d = self.factions[s.owner]
+        if a.manpower == 0 or d is a:
+            return
+        a.last_raid = self.tick
+        atk, dfn = self.power(a), self.power(d) * p.defense_factor
+        attacker_wins = atk > dfn
+        win, lose = (a, d) if attacker_wins else (d, a)
+        ratio = max(atk, dfn) / max(1e-9, min(atk, dfn))
+        raiders = min(a.manpower, p.strike_group_max)
+        part = {a.name: raiders, d.name: self.crew(d, s) + p.defense_reinforcement}
+        mp_before = {a.name: a.manpower, d.name: d.manpower}
+        if p.old_loss_formula:
+            loser_loss = floor(0.5 * lose.manpower)
+            winner_loss = floor(0.5 * lose.manpower / ratio)
+        else:
+            loser_loss = floor(min(0.5 * part[lose.name], p.assault_loss_cap * lose.manpower))
+            winner_loss = min(floor(loser_loss / ratio), part[win.name])
+        cas = {lose.name: loser_loss, win.name: winner_loss}
+        wnd = {}
+        for f in (lose, win):
+            w = floor(cas[f.name] * p.wounded_share)
+            self.kill_many(f, cas[f.name] - w, 7, "RAID_OBJECT")
+            wnd[f.name] = self.wound_many(f, w, 7, "RAID_OBJECT")
+            self.add_personnel_shock(f, cas[f.name], mp_before[f.name], 1.0, 7, "RAID_OBJECT")
+        healthy = max(0, raiders - cas[a.name])
+        w_a = wnd[a.name]
+        capacity = healthy * p.carry_unit
+        w_cost = p.wounded_load * p.carry_unit
+        morale_high = a.morale >= p.carry_morale_threshold
+        weight = sum(x.yield_ for x in self.owned(d))
+        stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
+        loot, carried = 0.0, 0
+        if attacker_wins:
+            if morale_high:
+                carried = min(w_a, int(capacity // w_cost))
+                loot = min(stock, capacity - carried * w_cost)
+            else:
+                loot = min(stock, capacity)
+                carried = min(w_a, int((capacity - loot) // w_cost))
+        abandoned = w_a - carried
+        if loot > 0:
+            self.setf(d, "supply", d.supply - loot, 7, "06", "RAID_OBJECT")
+            self.setf(a, "supply", a.supply + loot * (1 - p.share_rate[a.archetype]), 7, "06", "RAID_OBJECT")
+        fate = None
+        if abandoned:
+            self.drop_wounded(a, abandoned, True, None, 7, "ABANDON")
+            defenders_left = part[d.name] - cas[d.name]
+            if defenders_left > 0 and d.manpower > 0 and d.archetype in ("Хранители", "Контролёры"):
+                fate = "absorbed"
+                self.setf(a, "captured", a.captured + abandoned, 7, "03", "CAPTURE")
+                self.setf(d, "skittish", d.skittish + abandoned, 7, "03", "CAPTURE")
+                self.setf(d, "absorbed", d.absorbed + abandoned, 7, "03", "CAPTURE")
+            elif defenders_left > 0 and d.manpower > 0 and d.archetype == "Хищники":
+                fate = "sold"
+                self.setf(a, "sold", a.sold + abandoned, 7, "03", "PRISONER_SALE")
+                self.setf(d, "supply", d.supply + p.prisoner_price * abandoned, 7, "06", "PRISONER_SALE")
+            else:
+                fate = "dead"
+                self.setf(a, "dead", a.dead + abandoned, 7, "03", "ABANDON")
+            self.setf(a, "morale", max(0.0, a.morale - p.abandon_morale_cost * abandoned), 7, "06", "ABANDON")
+        self.events.append(dict(
+            tick=self.tick, kind="raid_object", forced=forced, attacker=a.name, defender=d.name, site=s.name,
+            attacker_wins=attacker_wins, raiders=raiders, healthy=healthy, wounded=w_a, carried=carried,
+            abandoned=abandoned, fate=fate, loot=loot, stock=stock, capacity=capacity, morale_high=morale_high,
+            casualties=dict(cas), wounded_by=dict(wnd)))
 
     def site(self, name):
         return next(s for s in self.sites if s.name == name)
@@ -323,9 +445,12 @@ class World:
                 self.setf(f, "forced_mode", True, 3, "05", "FORCED_LABOR")
             return
         # Хищники и прочие «изгоняющие» (R6): изгонять, пока расход не впишется в ожидаемый приход
-        before, n = f.manpower, 0
-        while n < p.expel_cap_per_tick and f.manpower > 0 and self.expense(f) > self.expected_income(f):
-            n += self._move(f, 1, p.desertion_order, "expelled", 3, "EXPEL")
+        before, n = f.manpower + f.wounded, 0
+        while n < p.expel_cap_per_tick and (f.manpower > 0 or f.wounded > 0) and self.expense(f) > self.expected_income(f):
+            if f.wounded > 0:   # раненые изгоняются первыми (spec 05, 03c)
+                n += self.drop_wounded(f, 1, False, "expelled", 3, "EXPEL")
+            else:
+                n += self._move(f, 1, p.desertion_order, "expelled", 3, "EXPEL")
         if n:
             self.add_personnel_shock(f, n, before, p.expel_shock_weight, 3, "EXPEL")
             self.events.append(dict(tick=self.tick, kind="expel", faction=f.name, n=n))
