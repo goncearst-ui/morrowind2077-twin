@@ -91,6 +91,17 @@ def test_gear_step_by_tier():
 
 
 @pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith("RL")])
+def test_relations_off_matches_baseline(sc):
+    """spec 08a, флаг: с relations_enabled = False журнал совпадает строка в строку с эталоном, снятым до 08a."""
+    import json
+    from dataclasses import replace
+    from pathlib import Path
+    base = json.loads((Path(__file__).parent / "baseline_pre08a.json").read_text(encoding="utf-8"))
+    w, _ = run(sc, replace(Params(), relations_enabled=False))
+    assert [list(r) for r in w.log] == base[sc]
+
+
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith("RL")])
 def test_relations_read_only(sc):
     """spec 08a: при relations_enabled = True журнал без строк модуля 08 совпадает с журналом при False (модуль только читает)."""
     from dataclasses import replace
