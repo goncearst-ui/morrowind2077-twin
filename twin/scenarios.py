@@ -100,6 +100,12 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World({"A": a, "B": b}, ss, p)
         w.forced_raids = {5: [("A", target)]}
         horizon = 30
+    elif sc in ("RP1", "RP2"):
+        # spec 07: один клан Хищников 30 на одном регионе, 200 тиков; каналы и налёты на объект выключены, решения 05 включены
+        p = replace(p, smuggling_enabled=False, fees_enabled=False, object_raids_enabled=False)
+        a = faction(p, "A", "Хищники", 30, 20, 0)
+        w = World({"A": a}, ss, p)
+        horizon = 200
     elif sc in ("IC1", "IC2"):
         # spec 06: Дрейфующие 30 без объектов, 200 тиков (контрабанда: потолок рынка, Heat)
         a = faction(p, "A", "Дрейфующие", 30, 20, 0)
@@ -268,6 +274,20 @@ def check(sc: str, w: World, series):
                     f"Достаток RA {ra:.1f}, RB {rb:.1f}, одиночка (RG1) {solo_end:.1f}"))
         raids = [e for e in w.events if e["kind"] == "raid"]
         res.append(("грабили обе фракции", {e["faction"] for e in raids} == {"A", "B"}, f"налётов: {len(raids)}"))
+    elif sc == "RP1":
+        A = w.factions["A"]
+        res.append(("потолок прокорма: на тике 200 людей от 5 до 10", 5 <= A.manpower <= 10, f"людей {A.manpower}"))
+        res.append(("угодья выедены: Достаток региона ниже стартового", w.regions[A.home] < w.p.region_start, f"Достаток {w.regions[A.home]:.0f} при старте {w.p.region_start:.0f}"))
+    elif sc == "RP2":
+        base = [list(r) for r in w.log]
+        res.append(("у каждого налёта party = min(Manpower, strike_group_max)",
+                    all(e["party"] == min(e["manpower"], w.p.strike_group_max) for e in w.events if e["kind"] == "raid") and any(e["kind"] == "raid" for e in w.events),
+                    f"налётов {sum(1 for e in w.events if e['kind'] == 'raid')}"))
+        for g in (3, 1):
+            w2, _ = run("RP2", replace(w.p, strike_group_max=g))
+            res.append((f"журнал состояний при strike_group_max {g} совпадает с журналом при {w.p.strike_group_max}",
+                        [list(r) for r in w2.log] == base and all(e["party"] == min(e["manpower"], g) for e in w2.events if e["kind"] == "raid"),
+                        f"строк {len(w2.log)} против {len(base)}"))
     elif sc in ("RD1", "RD2", "RD3", "RD3S", "RD4"):
         ev = next(e for e in w.events if e["kind"] == "raid_object" and e["forced"])
         A, B = w.factions["A"], w.factions["B"]
@@ -421,5 +441,6 @@ REVERSE = {
     "R8": (replace(Params(), heat_per_income=0.0), ("IC2",), "Heat не растёт (внимание выключено)"),
     "R9": (replace(Params(), wounded_share=0.0), ("RD2",), "раненых нет: все выбывшие гибнут"),
     "R10": (replace(Params(), carry_morale_threshold=0.0), ("RD3",), "порядок «что несут» не зависит от морали (всегда высокая)"),
+    "R11": (replace(Params(), region_recovery=3.0), ("RP1",), "восстановление региона 3.0: угодья не выедаются, потолок вдвое выше"),
     "R6": (replace(Params(), peaceful_decide=("Хищники", "Контролёры", "Хранители")), ("HD3",), "Хранители принимают решения как Хищники"),
 }

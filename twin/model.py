@@ -315,8 +315,9 @@ class World:
         to_pool = loot * (1 - p.share_rate[f.archetype])
         self.setf(f, "supply", f.supply + to_pool, 7, "06", "RAID")
         self.set_region(f.home, self.regions[f.home] - p.raid_cost, 7, "RAID")
+        # spec 07: группа налёта на регион — витрина; на добычу не влияет
         self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
-                                to_pool=to_pool, manpower=f.manpower))
+                                to_pool=to_pool, manpower=f.manpower, party=min(f.manpower, p.strike_group_max)))
 
     def raid_object(self, a: Faction, s: Site, forced: bool):
         """Spec 03c: налёт на объект. Бой как в штурме, но объект не захватывается; выбывшие частью ранены;
