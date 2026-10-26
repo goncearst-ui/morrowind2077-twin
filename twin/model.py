@@ -1005,7 +1005,18 @@ class World:
     def _war_end(self, key, reason: str):
         a, b = key
         self.rec(8, "08b", f"war.{a}>{b}.state", 1, 0, reason)
-        self.events.append(dict(kind="war_end", tick=self.tick, initiator=a, victim=b, reason=reason, goal=self.wars[key]["goal"]))
+        # spec 08e: проигравший по причине конца отдаёт победителю долю своего запаса; срок и «цель ушла» — без проигравшего
+        loser = {"WAR_END_GOAL": b, "WAR_END_BROKEN": b, "WAR_END_EXHAUSTED": a}.get(reason)
+        winner = (a if loser == b else b) if loser else None
+        amount = 0.0
+        if loser and self.p.war_reparation_share > 0:
+            fl, fw = self.factions[loser], self.factions[winner]
+            amount = self.p.war_reparation_share * fl.supply
+            if amount > 0:
+                self.setf(fl, "supply", fl.supply - amount, 8, "06", "REPARATIONS")
+                self.setf(fw, "supply", fw.supply + amount, 8, "06", "REPARATIONS")
+        self.events.append(dict(kind="war_end", tick=self.tick, initiator=a, victim=b, reason=reason, goal=self.wars[key]["goal"],
+                                winner=winner, loser=loser, reparations=amount))
         del self.wars[key]
         pair = tuple(sorted(key))
         until = self.tick + self.p.war_truce
@@ -1044,7 +1055,7 @@ class World:
                 continue
             for name in key:
                 f = self.factions[name]
-                pay = min(p.war_cost, f.supply)
+                pay = min(p.war_cost * (self.expense(f) if p.war_cost_share_of_expense else 1.0), f.supply)
                 if pay > 0:
                     self.setf(f, "supply", f.supply - pay, 8, "06", "WAR_COST")
         for a in sorted(self.factions):

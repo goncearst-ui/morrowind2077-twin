@@ -32,9 +32,24 @@ def faction(world_p, name, arche, n, dos, site_cost):
     return f
 
 
+# spec 08e: старые значения 08b закреплены в WR и WS, чтобы их критерии не менялись; подставляются, только если параметр равен новому значению по умолчанию
+OLD_WAR = dict(war_chance_base=4.0, war_chance_slope=3.0, war_chance_cap=15.0, war_truce=4, war_max_days=20,
+               war_cost=5.0, war_cost_share_of_expense=False, war_reparation_share=0.0)
+
+
+def pin_old_war(p, only=None):
+    d = Params()
+    return replace(p, **{k: v for k, v in OLD_WAR.items() if (only is None or k in only) and getattr(p, k) == getattr(d, k)})
+
+
 RL_SCENARIOS = ("RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
 MK_SCENARIOS = ("MK1", "MK2", "MK3", "MK4", "MK5", "MK6")
 WS_SCENARIOS = ("WS1", "WS2", "WS3")
+# spec 08e: сценарии WE строятся на обстановке WR; WE_PINS — какие старые значения закреплены (остальные новые)
+WE_BASE = {"WE1": "WR1", "WE2": "WR5", "WE3a": "WR7a", "WE3b": "WR7b", "WE3c": "WR7c", "WE3d": "WR6", "WE3e": "WR7d"}
+_CH = ("war_chance_base", "war_chance_slope", "war_chance_cap")
+WE_PINS = {"WE1": (), "WE2": _CH, "WE3a": _CH, "WE3b": _CH, "WE3c": _CH, "WE3d": _CH + ("war_max_days",), "WE3e": _CH}
+WE_SCENARIOS = tuple(WE_BASE)
 WR_SCENARIOS = ("WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d")
 
 
@@ -269,7 +284,8 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             else:  # MK6
                 w.forced_raids = {5: [("A", "Перевал")], 12: [("A", "Перевал")]}
                 horizon = 14
-    elif sc in WR_SCENARIOS:
+    elif sc in WR_SCENARIOS or sc in WE_BASE:
+        wsc, sc = sc, WE_BASE.get(sc, sc)   # spec 08e: WE = обстановка WR с другими закреплениями
         # spec 08b: чистая обстановка как у RL и MK; отношения, знание и война включены; события только принудительные.
         # Карту порогов уклада не обнуляем: она нужна самой войне (список «штурмовых» укладов). Автономные штурмы отключены
         # порогом запаса assault_dos = 0 (по умолчанию он равен 10 суткам и совпадает с порогом нужды: нужда запускала бы штурм).
@@ -278,6 +294,7 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
                     prisoner_sale_enabled=False, decisions_enabled=False, relations_enabled=True,
                     knowledge_enabled=True, wars_enabled=True, assault_dos=0.0, raids_enabled=False)
+        p = pin_old_war(p, WE_PINS[wsc]) if wsc in WE_BASE else pin_old_war(p)
         arche = "Контролёры" if sc == "WR2" else "Хищники"
         a = faction(p, "A", arche, 90, 9.9, 0)
         rudnik = Site("Рудник", 0, 90 * p.per_head_cost * p.archetype_cost_mult[arche], 1)
@@ -308,12 +325,15 @@ def build(sc: str, p: Params) -> tuple[World, int]:
                 w.forced_assaults = {25: [("A", "Перевал")]}
             elif sc == "WR7d":
                 w.forced_assaults = {25: [("C", "Перевал")]}
+            if wsc == "WE1":
+                horizon = 101
     elif sc in WS_SCENARIOS:
         # spec 08d: обстановка WR; до тика 20 автономные нападения выключены, на тике 20 сценарная команда их включает.
         # war_steers_attacks включает run() (для WS по умолчанию True); обратные проверки передают False явно.
         p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
                     prisoner_sale_enabled=False, decisions_enabled=False, relations_enabled=True,
                     knowledge_enabled=True, wars_enabled=True, assault_dos=0.0, raids_enabled=False)
+        p = pin_old_war(p)
         a = faction(p, "A", "Хищники", 90, 9.9, 0)
         rudnik = Site("Рудник", 0, 90 * p.per_head_cost * p.archetype_cost_mult["Хищники"], 1)
         rudnik.owner = "A"
@@ -867,6 +887,47 @@ def check(sc: str, w: World, series):
                         bool(rd) and (rd[0]["tick"], rd[0]["site"], rd[0]["forced"]) == (20, "Насосная", False),
                         f"налёты: {[(e['tick'], e['site']) for e in rd]}"))
             res.append(("событие war_attack вида «налёт» на тике 20", [(e["tick"], e["attack"]) for e in wa] == [(20, "raid")], f"war_attack: {[(e['tick'], e['attack']) for e in wa]}"))
+    elif sc in WE_BASE:
+        def wrows(target):
+            return [(r[0], r[4], r[5], r[6]) for r in w.log if r[3] == target]
+        rep_rows = [r for r in w.log if r[6] == "REPARATIONS"]
+        near = lambda x, y, tol=1e-3: x is not None and abs(x - y) < tol
+        if sc == "WE1":
+            st, acc = wrows("war.A>B.state"), wrows("war.A>B.acc")
+            res.append(("счётчик A→B растёт по 1.0 за тик с тика 1", bool(acc) and acc[0] == (1, 0.0, 1.0, "WAR_ACC") and acc[98][:3] == (99, 98.0, 99.0), f"первые строки: {acc[:2]}, строка 99: {acc[98:99]}"))
+            res.append(("война объявлена на тике 100, не раньше", st == [(100, 0, 1, "WAR_DECLARED")], f"строки state: {st}"))
+            res.append(("после объявления счётчик 0.0", near(w.war_acc.get(("A", "B")), 0.0), f"acc: {w.war_acc.get(('A', 'B'))}"))
+        elif sc == "WE2":
+            cost = [r for r in w.log if r[6] == "WAR_COST"]
+            ok = True
+            det = []
+            for who in ("A", "B"):
+                mine = [r for r in cost if r[3] == f"{who}.supply"]
+                exp = 0.25 * w.expense(w.factions[who])
+                det.append(f"{who}: {len(mine)} строк, ожидалось {exp:.2f}, первая {round(mine[0][4] - mine[0][5], 2) if mine else None}")
+                ok = ok and [r[0] for r in mine] == list(range(20, 26)) and all(near(r[4] - r[5], exp, 0.01) for r in mine)
+            res.append(("WAR_COST у A и у B на тиках 20…25, каждая ровно 25% расхода фракции", ok, "; ".join(det)))
+        elif sc == "WE3d":
+            st, tr = wrows("war.A>B.state"), wrows("truce.A-B")
+            res.append(("конец по сроку на тике 39 (срок закреплён 20)", st == [(19, 0, 1, "WAR_DECLARED"), (39, 1, 0, "WAR_END_TIMEOUT")], f"строки state: {st}"))
+            res.append(("репараций нет", not rep_rows, f"строк REPARATIONS: {len(rep_rows)}"))
+            res.append(("перемирие с тика 39 до тика 54 (15 суток)", tr == [(39, 0, 54, "TRUCE")], f"строки truce: {tr}"))
+        elif sc == "WE3e":
+            st = wrows("war.A>B.state")
+            res.append(("цель ушла: WAR_END_GOAL_LOST на тике 25", st == [(19, 0, 1, "WAR_DECLARED"), (25, 1, 0, "WAR_END_GOAL_LOST")], f"строки state: {st}"))
+            res.append(("репараций нет", not rep_rows, f"строк REPARATIONS: {len(rep_rows)}"))
+        else:
+            reason, loser, winner = {"WE3a": ("WAR_END_BROKEN", "B", "A"), "WE3b": ("WAR_END_EXHAUSTED", "A", "B"), "WE3c": ("WAR_END_GOAL", "B", "A")}[sc]
+            st = wrows("war.A>B.state")
+            res.append((f"война закрыта на тике 25, {reason}", st == [(19, 0, 1, "WAR_DECLARED"), (25, 1, 0, reason)], f"строки state: {st}"))
+            lr = [r for r in rep_rows if r[3] == f"{loser}.supply"]
+            wr = [r for r in rep_rows if r[3] == f"{winner}.supply"]
+            ok = len(rep_rows) == 2 and len(lr) == 1 and len(wr) == 1 and lr[0][0] == wr[0][0] == 25
+            res.append(("две строки REPARATIONS на тике 25: у проигравшего убыль, у победителя рост", ok, f"строки: {[(r[0], r[3], r[4], r[5]) for r in rep_rows]}"))
+            if ok:
+                drop, gain = lr[0][4] - lr[0][5], wr[0][5] - wr[0][4]
+                res.append(("проигравший отдал 40% своего запаса", near(drop / lr[0][4], 0.40), f"отдано {drop:.2f} из {lr[0][4]:.2f}"))
+                res.append(("WE4: победитель получил ровно столько, сколько отдал проигравший", near(drop, gain, 0.01), f"отдано {drop:.4f}, получено {gain:.4f}"))
     return res, m
 
 
@@ -908,4 +969,7 @@ REVERSE = {
     "R29": (replace(Params(), war_exhausted_share=0.0), ("WR7b",), "конец «выдохлись» выключен"),
     "R30": (replace(Params(), war_steers_attacks=False), ("WS1",), "война не направляет штурм (выбор цели как до 08d)"),
     "R31": (replace(Params(), war_steers_attacks=False), ("WS3",), "война не направляет налёт (выбор цели как до 08d)"),
+    "R32": (replace(Params(), war_reparation_share=0.0), ("WE3a",), "репараций нет"),
+    "R33": (replace(Params(), war_cost=0.0), ("WE2",), "война ничего не стоит (цена 0)"),
+    "R34": (replace(Params(), war_chance_base=4.0, war_chance_slope=3.0, war_chance_cap=15.0), ("WE1",), "старый быстрый накопитель 4.0 / 3.0 / 15"),
 }
