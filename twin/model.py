@@ -103,6 +103,13 @@ class World:
     regions: dict = field(default_factory=dict)          # имя региона -> Достаток (06); "common" — один регион на всех
     rel: dict = field(default_factory=dict)              # (пострадавший, обидчик) -> Relation (spec 08a)
     rel_cursor: int = 0                                  # сколько событий из events уже учтено фазой 8
+    known_at_start: dict = field(default_factory=dict)   # фракция -> (объекты, чьего владельца она знает со старта) (spec 08c)
+    know: dict = field(default_factory=dict)             # (фракция, объект) -> владелец по её сведениям (spec 08c)
+    rumors: list = field(default_factory=list)           # слухи в пути: dict(site, owner, born, due, key) (spec 08c)
+    motive: set = field(default_factory=set)             # пары (фракция, объект) с мотивом (spec 08c)
+    know_cursor: int = 0
+    know_started: bool = False
+    rumor_seq: dict = field(default_factory=dict)
 
     @property
     def prosperity(self) -> float:
@@ -487,6 +494,9 @@ class World:
         # фаза 8 — отношения и обида (spec 08a): только читает события тика, ничего не меняет в других модулях
         if self.p.relations_enabled:
             self.relations_step()
+        # фаза 8 — знание и мотив (spec 08c): только читает, в состояние других модулей не пишет
+        if self.p.knowledge_enabled:
+            self.knowledge_step()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
@@ -873,3 +883,75 @@ class World:
             self.rec(8, "08", f"rel.{victim}>{offender}.H", r.h, h, "REL")
             self.rec(8, "08", f"rel.{victim}>{offender}.level", r.level, lvl, "REL")
             r.h, r.level = h, lvl
+
+    # ---------- 08c: знание и мотив ----------
+    def _know_set(self, f: str, site: str, owner, reason: str):
+        """Записная книжка фракции: владелец объекта по её сведениям; None — записи нет."""
+        old = self.know.get((f, site))
+        if old == owner:
+            return
+        if owner is None:
+            del self.know[(f, site)]
+        else:
+            self.know[(f, site)] = owner
+        self.rec(8, "08c", f"know.{f}>{site}", old, owner, reason)
+
+    def knowledge_step(self):
+        """Фаза 8, после relations_step. Порядок: события тика → слепое нападение → участники узнают → слух рождается →
+        гаснут устаревшие записи → слухи, дошедшие до срока → пересчёт мотива (spec 08c §1)."""
+        p = self.p
+        if not self.know_started:
+            self.know_started = True
+            for f, names in self.known_at_start.items():
+                for sname in names:
+                    s = self.site(sname)
+                    if s.owner not in (None, f):
+                        self._know_set(f, sname, s.owner, "KNOW_START")
+        new_events = self.events[self.know_cursor:]
+        know0 = dict(self.know)   # состояние на начало обработки тика: по нему считается «слепое» нападение
+        for e in new_events:
+            if e.get("kind") not in ("raid_object", "assault"):
+                continue
+            a, d, sname = e["attacker"], e["defender"], e["site"]
+            owner_after = a if (e["kind"] == "assault" and e["attacker_wins"]) else d
+            if know0.get((a, sname)) != d:
+                self.events.append(dict(kind="blind_attack", tick=self.tick, attacker=a, defender=d, site=sname, forced=e["forced"]))
+            for f in (a, d):
+                if f != owner_after:
+                    self._know_set(f, sname, owner_after, "KNOW_DIRECT")
+            born = self.tick
+            n = self.rumor_seq.get((sname, born), 0)
+            self.rumor_seq[(sname, born)] = n + 1
+            key = f"rumor.{sname}.{born}" + (f".{n}" if n else "")
+            self.rumors.append(dict(site=sname, owner=owner_after, born=born, due=born + p.rumor_delay, key=key))
+            self.rec(8, "08c", key, 0, 1, "RUMOR_NEW")
+        if p.knowledge_expires_on_owner_change:
+            for (f, sname), val in sorted(self.know.items()):
+                if self.site(sname).owner != val:
+                    self._know_set(f, sname, None, "KNOW_LOST")
+        due = [r for r in self.rumors if r["due"] <= self.tick]
+        self.rumors = [r for r in self.rumors if r["due"] > self.tick]
+        for r in due:
+            cur = self.site(r["site"]).owner
+            if p.rumor_drop_stale and cur != r["owner"]:
+                self.rec(8, "08c", r["key"], 1, 0, "RUMOR_STALE")
+                continue
+            for f in self.factions:
+                if f != cur and f != r["owner"]:
+                    self._know_set(f, r["site"], r["owner"], "KNOW_RUMOR")
+            self.rec(8, "08c", r["key"], 1, 0, "RUMOR_DELIVERED")
+        now = set()
+        for f, fac in self.factions.items():
+            if fac.manpower == 0 or not fac.days_supply < p.hunger_threshold:
+                continue
+            for s in self.sites:
+                if s.owner in (None, f) or self.factions[s.owner].manpower == 0 or s.yield_ <= 0:
+                    continue
+                if self.know.get((f, s.name)) == s.owner:
+                    now.add((f, s.name))
+        for f, sname in sorted(now - self.motive):
+            self.rec(8, "08c", f"motive.{f}>{sname}", 0, 1, "MOTIVE")
+        for f, sname in sorted(self.motive - now):
+            self.rec(8, "08c", f"motive.{f}>{sname}", 1, 0, "MOTIVE")
+        self.motive = now
+        self.know_cursor = len(self.events)

@@ -32,6 +32,7 @@ def faction(world_p, name, arche, n, dos, site_cost):
 
 
 RL_SCENARIOS = ("RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6")
+MK_SCENARIOS = ("MK1", "MK2", "MK3", "MK4", "MK5", "MK6")
 
 
 SOLO = {  # spec 03a: (уклад, численность, объекты)
@@ -224,6 +225,47 @@ def build(sc: str, p: Params) -> tuple[World, int]:
                 w.forced_assaults = {5: [("A", "Перевал")]}
                 w.scheduled = {101: [lambda w: setattr(w.site("Перевал"), "owner", "B")]}
                 horizon = 130
+    elif sc in MK_SCENARIOS:
+        # spec 08c: чистая обстановка как у RL; знание и мотив включены; события только принудительные
+        p = replace(p, object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, decisions_enabled=False, knowledge_enabled=True,
+                    archetype_assault_threshold={})   # автономных штурмов нет, только принудительные
+        ss = sites()
+        ss[0].owner = "B"
+        if sc == "MK4":
+            fs = {"B": faction(p, "B", "Хранители", 60, 60, 40),
+                  "H": faction(p, "H", "Хранители", 40, 3, 0),     # голодает и знает объект
+                  "F": faction(p, "F", "Хранители", 40, 60, 0),    # сыта и знает объект
+                  "U": faction(p, "U", "Хранители", 40, 3, 0)}     # голодает и не знает
+            w = World(fs, ss, p)
+            w.known_at_start = {"H": ("Перевал",), "F": ("Перевал",)}
+            horizon = 3
+        else:
+            fs = {"A": faction(p, "A", "Хищники", 90, 60, 0),
+                  "B": faction(p, "B", "Хранители", 60, 60, 40)}
+            if sc == "MK5":
+                fs["C"] = faction(p, "C", "Хищники", 90, 60, 0)
+                fs["D"] = faction(p, "D", "Дрейфующие", 30, 60, 0)
+            else:
+                fs["C"] = faction(p, "C", "Хранители", 60, 60, 0)
+            w = World(fs, ss, p)
+            if sc == "MK1":
+                horizon = 4
+            elif sc == "MK2":
+                w.forced_raids = {5: [("A", "Перевал")]}
+                horizon = 14
+            elif sc == "MK3":
+                w.known_at_start = {"C": ("Перевал",)}
+                w.forced_assaults = {5: [("A", "Перевал")]}
+                w.scheduled = {30: [lambda w: setattr(w.site("Перевал"), "owner", "B")]}
+                horizon = 40
+            elif sc == "MK5":
+                w.forced_raids = {5: [("A", "Перевал")]}
+                w.forced_assaults = {8: [("C", "Перевал")]}
+                horizon = 16
+            else:  # MK6
+                w.forced_raids = {5: [("A", "Перевал")], 12: [("A", "Перевал")]}
+                horizon = 14
     else:
         raise ValueError(sc)
     for f in w.factions.values():
@@ -639,6 +681,45 @@ def check(sc: str, w: World, series):
             res.append(("пара поднялась через H = 5 и вернулась ниже линии затуханием", bool(crossed), "; ".join(crossed) or "таких пар нет"))
             diff = [f"{a}→{b} {lv(hend[(a, b)])} / {b}→{a} {lv(hend[(b, a)])}" for a, b in pairs if a < b and lv(hend[(a, b)]) != lv(hend[(b, a)])]
             res.append(("есть пара с H(A→B) и H(B→A) в разных уровнях", bool(diff), "; ".join(diff) or "таких пар нет"))
+    elif sc in MK_SCENARIOS:
+        def mrows(target):
+            return [(r[0], r[4], r[5], r[6]) for r in w.log if r[3] == target]
+        blind = [e for e in w.events if e["kind"] == "blind_attack"]
+        if sc == "MK1":
+            res.append(("до события знания нет: ни одной строки know, rumor, motive",
+                        not [r for r in w.log if r[2] == "08c"], f"строк модуля 08c: {len([r for r in w.log if r[2] == '08c'])}"))
+        elif sc == "MK2":
+            ev = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("сценарий валиден: один налёт A на объект B на тике 5", len(ev) == 1 and ev[0]["tick"] == 5, f"налётов {len(ev)}"))
+            a, c = mrows("know.A>Перевал"), mrows("know.C>Перевал")
+            res.append(("участник A знает с тика 5", a == [(5, None, "B", "KNOW_DIRECT")], f"строки A: {a}"))
+            res.append(("третья фракция C узнаёт на тике 12 (5 + 7), не раньше", c == [(12, None, "B", "KNOW_RUMOR")], f"строки C: {c}"))
+            r = mrows("rumor.Перевал.5")
+            res.append(("слух рождён на тике 5 и доставлен на тике 12", r == [(5, 0, 1, "RUMOR_NEW"), (12, 1, 0, "RUMOR_DELIVERED")], f"строки слуха: {r}"))
+        elif sc == "MK3":
+            ev = [e for e in w.events if e["kind"] == "assault"]
+            res.append(("сценарий валиден: штурм A с захватом на тике 5", len(ev) == 1 and ev[0]["attacker_wins"] and ev[0]["tick"] == 5, f"штурмов {len(ev)}"))
+            c = mrows("know.C>Перевал")
+            exp = [(1, None, "B", "KNOW_START"), (5, "B", None, "KNOW_LOST"), (12, None, "A", "KNOW_RUMOR"), (30, "A", None, "KNOW_LOST")]
+            res.append(("знание C: старт «B» → гаснет на тике 5 → слух о захвате на тике 12 даёт «A» → гаснет на тике 30 при возврате без события и не возвращается", c == exp, f"строки C: {c}"))
+        elif sc == "MK4":
+            res.append(("сценарий валиден: H и U голодают, F сыта", w.factions["H"].days_supply < p.hunger_threshold and w.factions["U"].days_supply < p.hunger_threshold
+                        and w.factions["F"].days_supply >= p.hunger_threshold,
+                        f"запас H {w.factions['H'].days_supply:.1f}, U {w.factions['U'].days_supply:.1f}, F {w.factions['F'].days_supply:.1f} суток, порог {p.hunger_threshold:.0f}"))
+            res.append(("мотив только у H (голод и знание)", w.motive == {("H", "Перевал")}, f"мотивы в конце: {sorted(w.motive)}"))
+            res.append(("у F (сыта) и U (не знает) мотива не было ни разу", not mrows("motive.F>Перевал") and not mrows("motive.U>Перевал"), ""))
+        elif sc == "MK5":
+            ev = [e for e in w.events if e["kind"] in ("raid_object", "assault")]
+            res.append(("сценарий валиден: налёт A на тике 5 и штурм C с захватом на тике 8", [(e["kind"], e["tick"]) for e in ev] == [("raid_object", 5), ("assault", 8)] and ev[1]["attacker_wins"],
+                        f"события: {[(e['kind'], e['tick']) for e in ev]}"))
+            r1, r2, d = mrows("rumor.Перевал.5"), mrows("rumor.Перевал.8"), mrows("know.D>Перевал")
+            res.append(("слух тика 5 на тике 12 отброшен как устаревший", r1 == [(5, 0, 1, "RUMOR_NEW"), (12, 1, 0, "RUMOR_STALE")], f"строки слуха: {r1}"))
+            res.append(("слух тика 8 доставлен на тике 15", r2 == [(8, 0, 1, "RUMOR_NEW"), (15, 1, 0, "RUMOR_DELIVERED")], f"строки слуха: {r2}"))
+            res.append(("D ничего не знает на тике 12 и узнаёт «C» на тике 15", d == [(15, None, "C", "KNOW_RUMOR")], f"строки D: {d}"))
+        elif sc == "MK6":
+            ev = [e for e in w.events if e["kind"] == "raid_object"]
+            res.append(("сценарий валиден: два налёта A на объект B, тики 5 и 12", [e["tick"] for e in ev] == [5, 12], f"налёты на тиках {[e['tick'] for e in ev]}"))
+            res.append(("слепое нападение одно: первый налёт; второй A уже знает объект", [(e["tick"], e["attacker"]) for e in blind] == [(5, "A")], f"слепые: {[(e['tick'], e['attacker']) for e in blind]}"))
     return res, m
 
 
@@ -667,4 +748,8 @@ REVERSE = {
     "R16": (replace(Params(), grudge_push=1e9), ("RL2",), "лимит толчка обиды выключен"),
     "R17": (replace(Params(), grudge_cap=1e9), ("RL3",), "потолок обиды выключен"),
     "R18": (replace(Params(), grudge_pause=False), ("RL4b",), "пауза затухания выключена"),
+    "R19": (replace(Params(), rumor_delay=0), ("MK2",), "слух доходит мгновенно (задержка 0)"),
+    "R20": (replace(Params(), knowledge_expires_on_owner_change=False), ("MK3",), "знание не гаснет при смене владельца"),
+    "R21": (replace(Params(), hunger_threshold=1e9), ("MK4",), "порог нужды выключен (нуждаются все)"),
+    "R22": (replace(Params(), rumor_drop_stale=False), ("MK5",), "устаревший слух не отбрасывается"),
 }
