@@ -5,14 +5,15 @@
 2026-10-26: добавлены RD1–RD4 (RD3S — вариант RD3 с обороной Хищников), R9, R10; счёт людей включает раненых, захваченных и принятых — по утверждённому plan 03c, шаги 3 и 6.
 2026-10-25: добавлены IC1, IC2, IC3, IC5, R7, R8 по утверждённому plan 06, шаг 5; пометка «известный дефект» с DS4 снята — DS4 стал зелёным (см. отчёт 06; указание в самой пометке).
 2026-10-25: добавлены HD1–HD3, R5, R6; критерий RG4 переписан (люди ≥ 95, мораль < 55); счёт людей включает изгнанных — по утверждённому plan 05, шаг 5 (решение Стана: порог морали 55, RG4 вариант а).
-2026-10-26: добавлены RP1, RP2 и обратная проверка R11 по утверждённому plan 07, шаг 3 (решения Стана: границы RP1 5–10; налёт на регион без потерь)."""
+2026-10-26: добавлены RP1, RP2 и обратная проверка R11 по утверждённому plan 07, шаг 3 (решения Стана: границы RP1 5–10; налёт на регион без потерь).
+2026-10-26: добавлены RT1–RT4, RT2b, обратные R12–R15, регрессия «tiers_enabled = False», инвариант ярусов RT5 и проверка ступеней снаряжения по утверждённому plan 04, шаг 7 (решения Стана: ярусы 70/20/10, срочная реорганизация 3 тика)."""
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4")
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -22,7 +23,7 @@ KNOWN_DEFECT = pytest.mark.xfail(
            "Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
 
 
-@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2"])
+@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4"])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]
@@ -52,3 +53,37 @@ def test_people_conserved(sc):
     w, _ = run(sc)
     for n, f in w.factions.items():
         assert f.manpower + f.wounded + sum(getattr(f, b) for b in BUCKETS_OUT) == start[n] + f.absorbed, "люди появились или исчезли без следа (§1)"
+
+
+OLD_SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2")
+
+
+@pytest.mark.parametrize("sc", OLD_SCENARIOS)
+def test_tiers_off_matches_baseline(sc):
+    """spec 04, флаг: с tiers_enabled = False журнал совпадает строка в строку с эталоном, снятым до 04."""
+    import json
+    from dataclasses import replace
+    from pathlib import Path
+    base = json.loads((Path(__file__).parent / "baseline_pre04.json").read_text(encoding="utf-8"))
+    w, _ = run(sc, replace(Params(), tiers_enabled=False))
+    assert [list(r) for r in w.log] == base[sc]
+
+
+@pytest.mark.parametrize("sc", SCENARIOS)
+def test_tiers_invariant(sc):
+    """RT5: в каждый тик сумма ярусов = Manpower, ярусы раненых = раненые (проверка внутри run()), и в конце тоже."""
+    w, _ = run(sc)
+    for f in w.factions.values():
+        assert f.rank + f.vet + f.off == f.manpower
+        assert min(f.rank, f.vet, f.off) >= 0
+        assert sum(sum(e[3]) for e in f.wounded_queue) == f.wounded
+
+
+def test_gear_step_by_tier():
+    """spec 04: ступень снаряжения яруса по TF_Armory: Good от 35/45/60, Worn от 10/15/25 (офицеры/ветераны/рядовые)."""
+    from twin.model import Faction, World
+    f = Faction("A", "Хищники", steady=3, ordinary=4, skittish=3, supply=0.0, armory=50.0)
+    w = World({"A": f}, [], Params())
+    assert [w.gear_step(f, t) for t in ("rank", "vet", "off")] == ["Worn", "Good", "Good"]
+    f.armory = 12.0
+    assert [w.gear_step(f, t) for t in ("rank", "vet", "off")] == ["Rags", "Rags", "Worn"]

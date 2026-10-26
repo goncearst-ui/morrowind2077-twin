@@ -10,6 +10,7 @@ from .params import Params
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
 BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold", "captured")  # куда уходят люди; сумма с живыми = старт (§1)
+TIERS = ("rank", "vet", "off")  # ярусы 04: рядовые, ветераны, офицеры; порядок везде один
 CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
 
@@ -54,6 +55,13 @@ class Faction:
     wounded_queue: list = field(default_factory=list)   # [тик возврата, ведро, число]
     captured: int = 0               # брошенные раненые, попавшие в плен (выбыли из фракции)
     absorbed: int = 0               # принятые пленные других фракций (прибавка к старту для сохранения людей)
+    rank: int = 0                   # ярусы (spec 04): рядовые, ветераны, офицеры; сумма = Manpower
+    vet: int = 0
+    off: int = 0
+    paid: dict = field(default_factory=lambda: {"rank": 0.0, "vet": 0.0, "off": 0.0})       # накопленная выплата по ярусу, вне пула
+    last_paid: dict = field(default_factory=lambda: {"rank": 0, "vet": 0, "off": 0})        # тик последней выплаты по ярусу
+    underpaid: dict = field(default_factory=lambda: {"rank": False, "vet": False, "off": False})
+    reorg_queue: list = field(default_factory=list)  # тики срабатывания отложенных реорганизаций
 
     @property
     def manpower(self) -> int:
@@ -91,6 +99,8 @@ class World:
         for f in self.factions.values():
             if f.depot is None:
                 f.depot = self.best_depot(f)
+            if self.p.tiers_enabled:
+                self.init_tiers(f)
 
     def set_region(self, name, value, phase, reason):
         old = self.regions[name]
@@ -111,8 +121,149 @@ class World:
         setattr(f, attr, value)
         self.rec(phase, module, f"{f.name}.{attr}", old, value, reason)
 
+    # ---------- 04: ярусы (spec 04) ----------
+    def init_tiers(self, f: Faction):
+        sh = self.p.tier_start_share
+        m = f.manpower
+        f.off = floor(sh[2] * m + 1e-9)
+        f.vet = floor(sh[1] * m + 1e-9)
+        f.rank = m - f.off - f.vet
+
+    @staticmethod
+    def take_tiers(comp, n, prefer=()):
+        """Кого забирает выбытие n человек из состава comp = [рядовые, ветераны, офицеры].
+        Сначала ярусы из prefer (недоплаченные), остаток пропорционально: офицеры floor(n × off / всего),
+        ветераны floor(n × vet / всего), остаток — рядовые, не хватает — ветераны, затем офицеры. Без случайности."""
+        n = min(n, sum(comp))
+        rem = [0, 0, 0]
+        left = n
+        for i in prefer:
+            x = min(comp[i] - rem[i], left)
+            rem[i] += x
+            left -= x
+        if left > 0:
+            avail = [comp[i] - rem[i] for i in range(3)]
+            tot = sum(avail)
+            o = min(floor(left * avail[2] / tot), avail[2])
+            v = min(floor(left * avail[1] / tot), avail[1])
+            rem[2] += o
+            rem[1] += v
+            left -= o + v
+            for i, cap in ((0, avail[0]), (1, avail[1] - v), (2, avail[2] - o)):
+                x = min(left, cap)
+                rem[i] += x
+                left -= x
+        return tuple(rem)
+
+    def tier_remove(self, f: Faction, n: int, phase, prefer=(), forced=None):
+        """Живые выбыли (бакеты уже изменены): убрать n человек из ярусов; офицеры или ветераны убыли — отложенная реорганизация."""
+        if not self.p.tiers_enabled or n <= 0:
+            return (0, 0, 0)
+        comp = [f.rank, f.vet, f.off]
+        rem = tuple(forced) if forced is not None else self.take_tiers(comp, n, prefer)
+        for t, r in zip(TIERS, rem):
+            if r:
+                self.setf(f, t, getattr(f, t) - r, phase, "03", "TIER")
+        if rem[1] or rem[2]:
+            self.schedule_reorg(f, phase)
+        return rem
+
+    def tier_add(self, f: Faction, tt, phase):
+        if not self.p.tiers_enabled:
+            return
+        for t, x in zip(TIERS, tt):
+            if x:
+                self.setf(f, t, getattr(f, t) + x, phase, "03", "TIER")
+
+    def schedule_reorg(self, f: Faction, phase):
+        p = self.p
+        target_off = floor(p.tier_start_share[2] * f.manpower + 1e-9)
+        urgent = target_off > 0 and f.off < p.reorg_urgent_fill * target_off
+        old = len(f.reorg_queue)
+        f.reorg_queue.append(self.tick + (p.reorg_ticks_urgent if urgent else p.reorg_ticks))
+        self.rec(phase, "03", f"{f.name}.reorg_pending", old, len(f.reorg_queue), "REORG")
+
+    def reorganize(self, f: Faction):
+        """Фаза 1: сработавшие события реорганизации заполняют вакансии каскадом; понижений нет."""
+        if not self.p.tiers_enabled:
+            return
+        due = [d for d in f.reorg_queue if d <= self.tick]
+        if not due:
+            return
+        old = len(f.reorg_queue)
+        f.reorg_queue = [d for d in f.reorg_queue if d > self.tick]
+        self.rec(1, "03", f"{f.name}.reorg_pending", old, len(f.reorg_queue), "REORG")
+        sh = self.p.tier_start_share
+        t_off = floor(sh[2] * f.manpower + 1e-9)
+        t_vet = floor(sh[1] * f.manpower + 1e-9)
+        mv = min(max(0, t_off - f.off), f.vet)
+        if mv:
+            self.setf(f, "vet", f.vet - mv, 1, "03", "REORG")
+            self.setf(f, "off", f.off + mv, 1, "03", "REORG")
+        mv = min(max(0, t_vet - f.vet), f.rank)
+        if mv:
+            self.setf(f, "rank", f.rank - mv, 1, "03", "REORG")
+            self.setf(f, "vet", f.vet + mv, 1, "03", "REORG")
+
+    def kill_tier(self, f: Faction, k: int, tier: str = "off", phase=7, reason="KILL_TIER"):
+        """Сценарный вызов: убить k человек заданного яруса (удар по руководству; модуль 05 его позже вызовет)."""
+        n = min(k, getattr(f, tier)) if self.p.tiers_enabled else min(k, f.manpower)
+        forced = tuple(n if t == tier else 0 for t in TIERS) if self.p.tiers_enabled else None
+        return self._move(f, n, self.p.drain_order, "dead", phase, reason, tiers=forced)
+
+    def tier_fighters(self, f: Faction):
+        """Бойцы по ярусам: принуждённые (05) берутся из рядовых, затем ветеранов, затем офицеров."""
+        comp = [f.rank, f.vet, f.off]
+        k = self.forced_count(f) if f.forced_mode else 0
+        for i in range(3):
+            x = min(k, comp[i])
+            comp[i] -= x
+            k -= x
+        return comp
+
+    def pay_tiers(self, f: Faction, amount: float, phase):
+        """Выплата доли добычи по ярусам с весом на человека; из пула она уже ушла (ShareRate, 06)."""
+        p = self.p
+        if not p.tiers_enabled or amount <= 0 or f.manpower == 0:
+            return
+        comp = [f.rank, f.vet, f.off]
+        w = [p.tier_pay_weight[i] * comp[i] for i in range(3)]
+        tot = sum(w)
+        for i, t in enumerate(TIERS):
+            if comp[i] > 0:
+                old = f.paid[t]
+                f.paid[t] = old + amount * w[i] / tot
+                self.rec(phase, "06", f"{f.name}.paid.{t}", old, f.paid[t], "PAY")
+            old = f.last_paid[t]
+            f.last_paid[t] = self.tick
+            self.rec(phase, "06", f"{f.name}.last_paid.{t}", old, self.tick, "PAY")
+
+    def underpay(self, f: Faction):
+        """Фаза 3: ярус недоплачен, если выплат не было дольше его терпения; мораль падает по доле недоплаченных."""
+        p = self.p
+        if not p.tiers_enabled or f.archetype not in p.raiding_archetypes or p.share_rate[f.archetype] <= 0:
+            return
+        comp = [f.rank, f.vet, f.off]
+        under = 0
+        for i, t in enumerate(TIERS):
+            state = comp[i] > 0 and self.tick - f.last_paid[t] > p.underpay_ticks[i]
+            if state != f.underpaid[t]:
+                self.rec(3, "06", f"{f.name}.underpaid.{t}", int(f.underpaid[t]), int(state), "UNDERPAY")
+                f.underpaid[t] = state
+            if state:
+                under += comp[i]
+        if under and f.manpower:
+            self.setf(f, "morale", max(0.0, f.morale - p.underpay_morale * under / f.manpower), 3, "06", "UNDERPAY")
+
+    def gear_step(self, f: Faction, tier: str) -> str:
+        """Ступень снаряжения яруса по TF_Armory (расчётный вывод, в игру не подключается)."""
+        i = TIERS.index(tier)
+        if f.armory >= self.p.gear_good[i]:
+            return "Good"
+        return "Worn" if f.armory >= self.p.gear_worn[i] else "Rags"
+
     # ---------- 03: вёдра ----------
-    def _move(self, f: Faction, n: int, order: str, dest: str, phase, reason) -> int:
+    def _move(self, f: Faction, n: int, order: str, dest: str, phase, reason, prefer_underpaid=False, tiers=None) -> int:
         seq = ("skittish", "ordinary", "steady") if order == "skittish_first" else ("steady", "ordinary", "skittish")
         moved = 0
         for b in seq:
@@ -123,6 +274,9 @@ class World:
                 self.setf(f, b, getattr(f, b) - take, phase, "03", reason)
                 self.setf(f, dest, getattr(f, dest) + take, phase, "03", reason)
                 moved += take
+        if moved:
+            prefer = [i for i, t in enumerate(TIERS) if f.underpaid[t]] if prefer_underpaid else ()
+            self.tier_remove(f, moved, phase, prefer=prefer, forced=tiers)
         return moved
 
     def kill_many(self, f, n, phase, reason):
@@ -132,15 +286,26 @@ class World:
         """Выбывшие в раненые: порядок как у слива вёдер; запись в очередь выздоровления (spec 03c)."""
         seq = ("skittish", "ordinary", "steady") if self.p.drain_order == "skittish_first" else ("steady", "ordinary", "skittish")
         moved = 0
+        new = []
         for b in seq:
             if moved >= n:
                 break
             take = min(getattr(f, b), n - moved)
             if take:
                 self.setf(f, b, getattr(f, b) - take, phase, "03", reason)
-                f.wounded_queue.append([self.tick + self.p.recovery_ticks, b, take])
+                e = [self.tick + self.p.recovery_ticks, b, take, None]   # 4-й элемент: ярусы раненых (spec 04)
+                f.wounded_queue.append(e)
+                new.append(e)
                 self.setf(f, "wounded", f.wounded + take, phase, "03", reason)
                 moved += take
+        if moved and self.p.tiers_enabled:
+            left = list(self.tier_remove(f, moved, phase))
+            for e in new:
+                need, tt = e[2], [0, 0, 0]
+                for i in range(3):
+                    x = min(need, left[i])
+                    tt[i], left[i], need = x, left[i] - x, need - x
+                e[3] = tuple(tt)
         return moved
 
     def recover(self, f: Faction):
@@ -148,6 +313,8 @@ class World:
             f.wounded_queue.remove(e)
             self.setf(f, e[1], getattr(f, e[1]) + e[2], 1, "03", "RECOVERY")
             self.setf(f, "wounded", f.wounded - e[2], 1, "03", "RECOVERY")
+            if e[3] is not None:
+                self.tier_add(f, e[3], 1)
 
     def drop_wounded(self, f: Faction, n: int, newest: bool, dest: str | None, phase, reason) -> int:
         """Вывести n раненых из очереди (новейших — брошенные, старейших — изгнанные) в ведро dest."""
@@ -155,6 +322,9 @@ class World:
         while left > 0 and f.wounded_queue:
             e = f.wounded_queue[-1] if newest else f.wounded_queue[0]
             take = min(left, e[2])
+            if e[3] is not None:
+                gone = self.take_tiers(list(e[3]), take)
+                e[3] = tuple(a - b for a, b in zip(e[3], gone))
             e[2] -= take
             left -= take
             if e[2] == 0:
@@ -165,7 +335,7 @@ class World:
         return n - left
 
     def remove_many(self, f, n, phase, reason):
-        return self._move(f, n, self.p.desertion_order, "deserted", phase, reason)
+        return self._move(f, n, self.p.desertion_order, "deserted", phase, reason, prefer_underpaid=True)
 
     # ---------- 04: шок ----------
     def add_personnel_shock(self, f: Faction, lost: int, manpower_before: int, weight, phase, reason):
@@ -261,6 +431,8 @@ class World:
             self.setf(f, "shock", max(0.0, f.shock - self.p.shock_decay_per_tick), 1, "04", "DECAY")
         for f in fs:
             self.recover(f)
+        for f in fs:
+            self.reorganize(f)
         for name in list(self.regions):
             self.set_region(name, self.regions[name] + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
@@ -314,6 +486,7 @@ class World:
         loot = self.regions[f.home] * p.raid_yield
         to_pool = loot * (1 - p.share_rate[f.archetype])
         self.setf(f, "supply", f.supply + to_pool, 7, "06", "RAID")
+        self.pay_tiers(f, loot * p.share_rate[f.archetype], 7)
         self.set_region(f.home, self.regions[f.home] - p.raid_cost, 7, "RAID")
         # spec 07: группа налёта на регион — витрина; на добычу не влияет
         self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
@@ -366,6 +539,7 @@ class World:
         if loot > 0:
             self.setf(d, "supply", d.supply - loot, 7, "06", "RAID_OBJECT")
             self.setf(a, "supply", a.supply + loot * (1 - p.share_rate[a.archetype]), 7, "06", "RAID_OBJECT")
+            self.pay_tiers(a, loot * p.share_rate[a.archetype], 7)
         fate = None
         if abandoned:
             self.drop_wounded(a, abandoned, True, None, 7, "ABANDON")
@@ -374,6 +548,7 @@ class World:
                 fate = "absorbed"
                 self.setf(a, "captured", a.captured + abandoned, 7, "03", "CAPTURE")
                 self.setf(d, "skittish", d.skittish + abandoned, 7, "03", "CAPTURE")
+                self.tier_add(d, (abandoned, 0, 0), 7)   # принятые пленные приходят рядовыми (spec 04)
                 self.setf(d, "absorbed", d.absorbed + abandoned, 7, "03", "CAPTURE")
             elif defenders_left > 0 and d.manpower > 0 and d.archetype == "Хищники":
                 fate = "sold"
@@ -451,7 +626,7 @@ class World:
             if f.wounded > 0:   # раненые изгоняются первыми (spec 05, 03c)
                 n += self.drop_wounded(f, 1, False, "expelled", 3, "EXPEL")
             else:
-                n += self._move(f, 1, p.desertion_order, "expelled", 3, "EXPEL")
+                n += self._move(f, 1, p.desertion_order, "expelled", 3, "EXPEL", prefer_underpaid=True)
         if n:
             self.add_personnel_shock(f, n, before, p.expel_shock_weight, 3, "EXPEL")
             self.events.append(dict(tick=self.tick, kind="expel", faction=f.name, n=n))
@@ -460,6 +635,7 @@ class World:
         p = self.p
         if f.manpower == 0:
             return
+        self.underpay(f)
         self.channels(f)
         self.decide(f)
         if f.forced_mode:
@@ -512,7 +688,12 @@ class World:
         return self.fighters(f) * (0.5 + f.armory / 100)
 
     def power(self, f: Faction) -> float:
-        return self.fighters(f) * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
+        # spec 04: бойцы взвешены по ярусам (среднее по 70/20/10 равно 1.0); без ярусов — прежнее число бойцов
+        if self.p.tiers_enabled:
+            n = sum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
+        else:
+            n = self.fighters(f)
+        return n * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
 
     def decide_assault(self, f: Faction):
         p = self.p

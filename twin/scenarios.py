@@ -106,6 +106,34 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         a = faction(p, "A", "Хищники", 30, 20, 0)
         w = World({"A": a}, ss, p)
         horizon = 200
+    elif sc in ("RT1", "RT2", "RT2R", "RT2b", "RT3", "RT4"):
+        # spec 04: ярусы. Чистая обстановка: каналы, решения и налёты на объект выключены; налёты на регион только в RT4
+        p = replace(p, smuggling_enabled=False, fees_enabled=False, object_raids_enabled=False,
+                    decisions_enabled=False, prisoner_sale_enabled=False, raids_enabled=(sc == "RT4"))
+        if sc == "RT1":
+            a = faction(p, "A", "Хищники", 90, 20, 0)
+            b = faction(p, "B", "Хранители", 60, 20, 0)
+            w = World({"A": a, "B": b}, ss, p)
+            horizon = 3
+        elif sc in ("RT2", "RT2R", "RT2b"):
+            a = faction(p, "A", "Хранители", 90, 200, 0)
+            w = World({"A": a}, ss, p)
+            tier, k = {"RT2": ("off", 3), "RT2R": ("rank", 3), "RT2b": ("off", 6)}[sc]
+
+            def strike(w, tier=tier, k=k):
+                f = w.factions["A"]
+                w.kill_tier(f, k, tier)
+                w.events.append(dict(kind="probe", tick=w.tick, power=w.power(f), off=f.off, manpower=f.manpower))
+            w.scheduled = {1: [strike]}
+            horizon = 15
+        elif sc == "RT3":
+            a = faction(p, "A", "Хищники", 60, 20, 0)
+            w = World({"A": a}, ss, p)
+            horizon = 25
+        else:
+            a = faction(p, "A", "Хищники", 90, 20, 0)
+            w = World({"A": a}, ss, p)
+            horizon = 1
     elif sc in ("IC1", "IC2"):
         # spec 06: Дрейфующие 30 без объектов, 200 тиков (контрабанда: потолок рынка, Heat)
         a = faction(p, "A", "Дрейфующие", 30, 20, 0)
@@ -164,6 +192,9 @@ def run(sc: str, p: Params | None = None):
         for n, f in w.factions.items():
             series[n].append((w.tick, f.manpower))
             assert f.manpower == f.steady + f.ordinary + f.skittish
+            if w.p.tiers_enabled:   # RT5: сумма ярусов = Manpower, ярусы раненых = раненые (spec 04)
+                assert f.rank + f.vet + f.off == f.manpower, f"{n}: ярусы {f.rank}+{f.vet}+{f.off} != Manpower {f.manpower} на тике {w.tick}"
+                assert sum(sum(e[3]) for e in f.wounded_queue) == f.wounded, f"{n}: ярусы раненых != раненые на тике {w.tick}"
     return w, series
 
 
@@ -288,6 +319,62 @@ def check(sc: str, w: World, series):
             res.append((f"журнал состояний при strike_group_max {g} совпадает с журналом при {w.p.strike_group_max}",
                         [list(r) for r in w2.log] == base and all(e["party"] == min(e["manpower"], g) for e in w2.events if e["kind"] == "raid"),
                         f"строк {len(w2.log)} против {len(base)}"))
+    elif sc == "RT1":
+        d0 = Params()
+        w0, _ = build("RT1", p)
+        for n, want in (("A", (63, 18, 9)), ("B", (42, 12, 6))):
+            f = w0.factions[n]
+            res.append((f"{n}: состав 70/20/10 и сумма = Manpower", (f.rank, f.vet, f.off) == want and f.rank + f.vet + f.off == f.manpower,
+                        f"{f.rank}/{f.vet}/{f.off} из {f.manpower}"))
+            old = w0.fighters(f) * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(p) / 100)
+            res.append((f"{n}: сила равна прежней формуле", abs(w0.power(f) - old) < 1e-9, f"{w0.power(f):.3f} против {old:.3f}"))
+    elif sc == "RT2":
+        d0 = Params()
+        pr = next(e for e in w.events if e["kind"] == "probe")
+        wr, _ = run("RT2R", p)
+        pr_r = next(e for e in wr.events if e["kind"] == "probe")
+        res.append(("сила после гибели 3 офицеров ниже, чем после 3 рядовых", pr["power"] < pr_r["power"] - 1e-9,
+                    f"{pr['power']:.2f} против {pr_r['power']:.2f}"))
+        rows = [r for r in w.log if r[3] == "A.off" and r[6] == "REORG"]
+        want_tick = 1 + d0.reorg_ticks
+        res.append((f"офицеры восстановлены повышением через {d0.reorg_ticks} тиков", bool(rows) and rows[0][0] == want_tick and rows[0][5] == 8,
+                    "повышение на тике " + (f"{rows[0][0]} (офицеров {rows[0][4]} → {rows[0][5]})" if rows else "—")))
+    elif sc == "RT2b":
+        d0 = Params()
+        rows = [r for r in w.log if r[3] == "A.off" and r[6] == "REORG"]
+        want_tick = 1 + d0.reorg_ticks_urgent
+        res.append((f"заполнено меньше 50%: срочная реорганизация через {d0.reorg_ticks_urgent} тика", bool(rows) and rows[0][0] == want_tick and rows[0][5] == 8,
+                    "повышение на тике " + (f"{rows[0][0]} (офицеров {rows[0][4]} → {rows[0][5]})" if rows else "—")))
+    elif sc == "RT3":
+        d0 = Params()
+        first = {t: next((r[0] for r in w.log if r[3] == f"A.underpaid.{t}" and r[5] == 1), None) for t in ("rank", "vet", "off")}
+        res.append(("недоплата: рядовые на тике 11, ветераны на 16, офицеры не раньше 26",
+                    first["rank"] == d0.underpay_ticks[0] + 1 and first["vet"] == d0.underpay_ticks[1] + 1 and (first["off"] is None or first["off"] >= d0.underpay_ticks[2] + 1),
+                    f"рядовые {first['rank']}, ветераны {first['vet']}, офицеры {first['off']}"))
+        mrows = [r for r in w.log if r[3] == "A.morale" and r[6] == "UNDERPAY"]
+        res.append(("мораль падает от недоплаты", bool(mrows) and all(r[5] < r[4] for r in mrows) and mrows[0][0] == first["rank"],
+                    f"строк UNDERPAY по морали {len(mrows)}" + (f", первая на тике {mrows[0][0]}" if mrows else "")))
+        des = next((r[0] for r in w.log if r[6] == "DESERTION" and r[3] == "A.deserted"), None)
+        tr = {t: [r for r in w.log if r[0] == des and r[3] == f"A.{t}" and r[6] == "TIER"] for t in ("rank", "vet", "off")}
+        res.append(("первый дезертир — из рядовых", des is not None and bool(tr["rank"]) and not tr["vet"] and not tr["off"],
+                    f"дезертирство на тике {des}; строки ярусов: рядовые {len(tr['rank'])}, ветераны {len(tr['vet'])}, офицеры {len(tr['off'])}"))
+    elif sc == "RT4":
+        ev = next(e for e in w.events if e["kind"] == "raid")
+        f0 = w.factions["A"]
+        heads = {"rank": 63, "vet": 18, "off": 9}
+        def pays(world):
+            return {t: next((r[5] - r[4] for r in world.log if r[3] == f"A.paid.{t}"), 0.0) for t in heads}
+        pa = pays(w)
+        ph = {t: pa[t] / heads[t] for t in heads}
+        res.append(("выплата на человека 1 : 2 : 4", ph["rank"] > 0 and abs(ph["vet"] / ph["rank"] - 2) < 1e-6 and abs(ph["off"] / ph["rank"] - 4) < 1e-6,
+                    f"на человека: рядовой {ph['rank']:.3f}, ветеран {ph['vet']:.3f}, офицер {ph['off']:.3f}"))
+        share = p.share_rate["Хищники"]
+        res.append(("сумма выплат = добыча × ShareRate", abs(sum(pa.values()) - ev["loot"] * share) < 1e-6, f"{sum(pa.values()):.2f} против {ev['loot'] * share:.2f}"))
+        w2, _ = run("RT4", replace(p, share_rate=dict(p.share_rate, Хищники=0.10)))
+        ph2 = {t: pays(w2)[t] / heads[t] for t in heads}
+        drop = {t: ph[t] - ph2[t] for t in heads}
+        res.append(("при доле 0.10 вместо 0.35 выплата на человека падает у всех, у офицеров сильнее, чем у ветеранов, у ветеранов сильнее, чем у рядовых",
+                    0 < drop["rank"] < drop["vet"] < drop["off"], f"падение на человека: рядовой {drop['rank']:.2f}, ветеран {drop['vet']:.2f}, офицер {drop['off']:.2f}"))
     elif sc in ("RD1", "RD2", "RD3", "RD3S", "RD4"):
         ev = next(e for e in w.events if e["kind"] == "raid_object" and e["forced"])
         A, B = w.factions["A"], w.factions["B"]
@@ -443,4 +530,8 @@ REVERSE = {
     "R10": (replace(Params(), carry_morale_threshold=0.0), ("RD3",), "порядок «что несут» не зависит от морали (всегда высокая)"),
     "R11": (replace(Params(), region_recovery=3.0), ("RP1",), "восстановление региона 3.0: угодья не выедаются, потолок вдвое выше"),
     "R6": (replace(Params(), peaceful_decide=("Хищники", "Контролёры", "Хранители")), ("HD3",), "Хранители принимают решения как Хищники"),
+    "R12": (replace(Params(), tier_power_weight=(1.0, 1.0, 1.0)), ("RT2",), "веса силы по ярусам 1 / 1 / 1"),
+    "R13": (replace(Params(), underpay_morale=0.0), ("RT3",), "недоплата не роняет мораль"),
+    "R14": (replace(Params(), tier_pay_weight=(1.0, 1.0, 1.0)), ("RT4",), "веса выплаты по ярусам 1 / 1 / 1"),
+    "R15": (replace(Params(), reorg_ticks_urgent=10), ("RT2b",), "срочной реорганизации нет (3 тика заменены на 10)"),
 }
