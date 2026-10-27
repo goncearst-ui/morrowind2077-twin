@@ -463,6 +463,74 @@ class World:
                     self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
         self.share_prev_owner = {s.name: s.owner for s in self.sites}
 
+    # ---------- 01: личное состояние именных (spec 01) ----------
+    def _npc_init(self):
+        p = self.p
+        for f in self.factions.values():
+            for n in f.named:
+                if "fear" not in n:
+                    n.update(traits=tuple(n.get("traits", ())), fear=0.0, loyalty=p.npc_loyalty_start, debt=0.0,
+                             share=100 * p.share_rate[f.archetype], share_dropped=False, share_before=None, pkg=None)
+
+    def _npc_pkg(self, f: Faction, n: dict) -> str:
+        from .npc import package_for
+        role = "Role_Leader" if n["role"] == "вожак" else "Role_Soldier"
+        return package_for(f.archetype, role, n["traits"], n["fear"], n["loyalty"], n["share_dropped"], False,
+                           self.p.npc_avoid_fear, self.p.npc_disaffected_loyalty)
+
+    def _npc_decay(self):
+        """Фаза 1: страх затухает."""
+        self._npc_init()
+        for f in self.factions.values():
+            for n in f.named:
+                if n["alive"] and n["fear"] > 0:
+                    new = max(0.0, n["fear"] - self.p.npc_fear_decay)
+                    self.rec(1, "01", f"{f.name}.named.{n['name']}.fear", n["fear"], new, "FEAR_DECAY")
+                    n["fear"] = new
+
+    def _npc_packages(self):
+        """Конец тика: пакет каждого живого именного пишется при изменении."""
+        for f in self.factions.values():
+            for n in f.named:
+                if n["alive"]:
+                    new = self._npc_pkg(f, n)
+                    if new != n["pkg"]:
+                        self.rec(8, "01", f"{f.name}.named.{n['name']}.package", n["pkg"] if n["pkg"] is not None else "-", new, "PACKAGE")
+                        n["pkg"] = new
+
+    def _npc_share_update(self, f: Faction, old_arch: str):
+        """Смена уклада: доля именных становится 100 × ставка нового уклада; падение бьёт по верности (spec 01 §1.5в)."""
+        p = self.p
+        self._npc_init()
+        for n in f.named:
+            if not n["alive"]:
+                continue
+            new_share = 100 * p.share_rate[f.archetype]
+            drop = n["share"] - new_share
+            self.rec(6, "01", f"{f.name}.named.{n['name']}.share", n["share"], new_share, "ARCH_CHANGE")
+            if drop >= p.npc_share_drop_min:
+                n["share_before"] = n["share"] if n["share_before"] is None else n["share_before"]
+                new_l = max(0.0, n["loyalty"] - p.npc_loyalty_share_k * drop)
+                self.rec(6, "01", f"{f.name}.named.{n['name']}.loyalty", n["loyalty"], new_l, "SHARE_DROP")
+                n["loyalty"] = new_l
+                if not n["share_dropped"]:
+                    n["share_dropped"] = True
+                    self.rec(6, "01", f"{f.name}.named.{n['name']}.share_dropped", 0, 1, "SHARE_DROP")
+            elif n["share_dropped"] and n["share_before"] is not None and new_share >= n["share_before"]:
+                n["share_dropped"], n["share_before"] = False, None
+                self.rec(6, "01", f"{f.name}.named.{n['name']}.share_dropped", 1, 0, "SHARE_RESTORED")
+            n["share"] = new_share
+
+    def _threaten(self, fname: str, name: str):
+        f = self.factions[fname]
+        self._npc_init()
+        n = next((x for x in f.named if x["name"] == name and x["alive"]), None)
+        if n is None:
+            return self._fail("threaten", "NO_TARGET", faction=fname)
+        new = min(100.0, n["fear"] + self.p.npc_fear_step)
+        self.rec(7, "01", f"{fname}.named.{name}.fear", n["fear"], new, "THREAT")
+        n["fear"] = new
+
     # ---------- 14: хозяин планеты (spec 14) ----------
     def _hegemon_candidate(self) -> str:
         counts = {}
@@ -570,6 +638,10 @@ class World:
             fn(self)
         fs = list(self.factions.values())
         # фаза 1 — затухание шока, восстановление региона
+        if self.p.npc_state_enabled:
+            if not self.p.leader_enabled:
+                raise ValueError("npc_state_enabled требует leader_enabled (нужны именные, spec 01)")
+            self._npc_decay()
         for f in fs:
             self.setf(f, "shock", max(0.0, f.shock - self.p.shock_decay_per_tick), 1, "04", "DECAY")
         for f in fs:
@@ -632,6 +704,8 @@ class World:
         # фаза 8 — хозяин планеты (spec 14): хранимый статус с запасом и паузой смены
         if self.p.planet_hegemon_enabled:
             self._hegemon_step()
+        if self.p.npc_state_enabled:
+            self._npc_packages()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
@@ -1274,6 +1348,10 @@ class World:
                 self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
             return
         p = self.p
+        if kind == "threaten":
+            if not p.npc_state_enabled:
+                raise ValueError("действие threaten требует npc_state_enabled (spec 01)")
+            return self._threaten(*act[1:])
         if not p.player_levers_enabled:
             raise ValueError("действия bribe/tip/persuade требуют player_levers_enabled (spec 21d)")
         if not p.leader_enabled:
@@ -1306,6 +1384,12 @@ class World:
         if self.player_funds < amount:
             return self._fail("bribe", "NO_FUNDS", faction=a)
         price = p.bribe_price_h * p.bribe_profile_mult.get(self._leader_profile(f), 1.0)
+        ln = None
+        if p.npc_state_enabled:
+            self._npc_init()
+            ln = next((x for x in f.named if x["name"] == f.leader), None)
+            if ln is not None and ln["loyalty"] < p.npc_disaffected_loyalty and ln["share_dropped"]:
+                price *= p.npc_bribe_disaffected_mult
         r = self._register(a, b)
         dh = min(amount / price, p.incite_cap - r.i)
         if dh <= 1e-9:
@@ -1317,6 +1401,9 @@ class World:
         r.i += dh
         self.rec(7, "08", f"rel.{a}>{b}.i", old, r.i, "PLAYER_BRIBE")
         self.bribe_last[a] = self.tick
+        if ln is not None:
+            self.rec(7, "01", f"{a}.named.{ln['name']}.debt", ln["debt"], ln["debt"] + cost, "BRIBE_DEBT")
+            ln["debt"] += cost
         self.events.append(dict(kind="player_bribe", tick=self.tick, faction=a, target=b, dh=dh, cost=cost))
         if p.bribe_gives_knowledge:
             for s in self.sites:
@@ -1349,7 +1436,12 @@ class World:
             return self._fail("persuade", "NO_LEADER", faction=t)
         if f.shock < p.persuade_min_shock:
             return self._fail("persuade", "NO_SHOCK", faction=t)
-        if self.player_rep.get(t, p.rep_default) < p.persuade_min_rep:
+        waived = False
+        if p.npc_state_enabled:
+            self._npc_init()
+            ln = next((x for x in f.named if x["name"] == f.leader), None)
+            waived = ln is not None and ln["debt"] >= p.npc_persuade_debt_waive
+        if self.player_rep.get(t, p.rep_default) < p.persuade_min_rep and not waived:
             return self._fail("persuade", "LOW_REP", faction=t)
         if p.persuade_block_archnemesis and self.rel_h(t, o) >= p.rel_level_cuts[3]:
             return self._fail("persuade", "ARCHNEMESIS", faction=t)
@@ -1515,4 +1607,6 @@ class World:
         self.setf(f, "cooldown", p.evo_cooldown, 6, "07", f"RULE_{rule}")
         f.changes += 1
         self._pending(f, None, 0)
+        if self.p.npc_state_enabled:
+            self._npc_share_update(f, old)
         self.events.append(dict(kind="archetype_change", tick=self.tick, faction=f.name, frm=old, to=cand, rule=rule))

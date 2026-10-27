@@ -272,5 +272,19 @@ class Params:
     hegemon_stateless: bool = False                # только для R82: статус без памяти, каждый тик заново
     hegemon_count_unowned: bool = False            # только для R83: бесхозные активы считаются «фракцией»
 
+    # --- 01: личное состояние именных (spec 01) ---
+    npc_state_enabled: bool = False                # False = личных чисел нет, журнал как до 01 [предл]
+    npc_loyalty_start: float = 60.0                # [предл]
+    npc_fear_step: float = 30.0                    # угроза игрока [предл]
+    npc_fear_decay: float = 2.0                    # в тик [предл]
+    npc_avoid_fear: float = 70.0                   # порог Avoid_Package [док 01: «порог»; число предл]
+    npc_share_drop_min: float = 10.0               # падение доли, которое бьёт по верности [предл]
+    npc_loyalty_share_k: float = 2.0               # верность −= k × падение доли [предл]
+    npc_disaffected_loyalty: float = 30.0          # [предл]
+    npc_bribe_disaffected_mult: float = 0.5        # скидка подкупа недовольного [док 01; число предл]
+    npc_persuade_debt_waive: float = 200.0         # долг, снимающий проверку LOW_REP [предл]
+    npc_swap34: bool = False                       # только для R84: строки 3 и 4 таблицы ярлыков поменяны
+    npc_steady_for_skittish: bool = False          # только для R85: ведро Skittish не выводится из Neuroticism_High
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

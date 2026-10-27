@@ -352,7 +352,7 @@ def test_wars_requirements():
 
 
 # ---------- задачи очереди (plans/QUEUE.md): общие тесты ----------
-BASELINES = ("13a", "15", "14")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
+BASELINES = ("13a", "15", "14", "01n")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
 
 
 def _baseline_pairs():
@@ -390,6 +390,15 @@ def test_bn4_wars_off_is_clean(layout):
     """BN4 (spec 08f): журнал режима «войны выкл» совпадает с журналом режима «войны вкл» без строк 08b при war_cost = 0, репарациях 0 и без управления нападениями."""
     from twin.bench import bn4
     assert bn4(layout)
+
+
+def test_np9_threaten_requires_flag():
+    """NP9 (spec 01): действие threaten без npc_state_enabled — ValueError на тике действия."""
+    from twin.scenarios import build
+    w, _ = build("NP9", Params())
+    w.player_script = {1: [("threaten", "A", "A:вожак")]}
+    with pytest.raises(ValueError):
+        w.step()
 
 
 def test_bn1_bench_report_runs():
