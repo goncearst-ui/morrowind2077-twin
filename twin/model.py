@@ -139,6 +139,10 @@ class World:
     persuade_last: dict = field(default_factory=dict)    # фракция -> тик последнего успешного убеждения
     share_pub: dict = field(default_factory=dict)        # (регион, фракция) -> последняя опубликованная доля (spec 13a)
     share_prev_owner: dict = field(default_factory=dict) # имя объекта -> владелец на конец прошлого тика (R71)
+    envoys: dict = field(default_factory=dict)           # фракция -> представитель в хабе (spec 03d)
+    hub_board: dict = field(default_factory=dict)        # ключ -> тик публикации (spec 03d)
+    hub_pending: list = field(default_factory=list)      # события, ждущие публикации
+    hub_cursor: int = 0
     rep_rumors: list = field(default_factory=list)       # слухи о действиях игрока в пути (spec 02)
     region_rep: dict = field(default_factory=dict)       # регион -> региональная репутация игрока (spec 02)
     hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
@@ -465,6 +469,70 @@ class World:
                     self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
         self.share_prev_owner = {s.name: s.owner for s in self.sites}
 
+    # ---------- 03d: представители в хабе (spec 03d) ----------
+    def _envoy_name(self, fname: str) -> str:
+        return f"{fname}:представитель"
+
+    def _envoy_init(self):
+        for n, f in self.factions.items():
+            if n not in self.envoys:
+                self.envoys[n] = dict(name=self._envoy_name(n), role="представитель", profile="Дипломат", region=self.p.hub_region, alive=True)
+                self.rec(1, "03d", f"{n}.envoy", 0, 1, "ENVOY_INIT")
+                if self.p.envoy_counts_manpower:
+                    self.setf(f, "ordinary", f.ordinary + 1, 1, "03d", "ENVOY_INIT")
+                    f.rank += 1
+
+    def _kill_envoy(self, fname: str) -> bool:
+        e = self.envoys.get(fname)
+        if e is None or not e["alive"]:
+            return False
+        e["alive"] = False
+        self.rec(7, "03d", f"{fname}.envoy", 1, 0, "ENVOY_KILLED")
+        self.events.append(dict(kind="envoy_killed", tick=self.tick, faction=fname))
+        return True
+
+    def _hub_step(self):
+        """Фаза 8: события фракций попадают на доску через hub_rumor_delay тиков, если представитель жив на момент публикации."""
+        p = self.p
+        parts = {"leader_killed": ("faction",), "officer_killed": ("faction",), "assault": ("attacker", "defender"), "depot_strike": ("faction",),
+                 "war_declared": ("initiator", "victim"), "war_end": ("initiator", "victim"), "hegemon_change": ("old", "new")}
+        for e in self.events[self.hub_cursor:]:
+            for key in parts.get(e["kind"], ()):
+                fn = e.get(key)
+                if fn in self.factions:
+                    self.hub_pending.append(dict(faction=fn, kind=e["kind"], tick=e["tick"], due=e["tick"] + p.hub_rumor_delay))
+        self.hub_cursor = len(self.events)
+        for r in [x for x in self.hub_pending if x["due"] <= self.tick]:
+            self.hub_pending.remove(r)
+            if self.envoys[r["faction"]]["alive"] or p.hub_board_when_dead:
+                k = f"{r['faction']}.{r['kind']}.{r['tick']}"
+                self.hub_board[k] = self.tick
+                self.rec(8, "03d", f"hub.board.{k}", 0, 1, "HUB_RUMOR")
+
+    def _frame(self, victim: str, accused: str, opts: dict):
+        p = self.p
+        if victim not in self.factions or accused not in self.factions:
+            return self._fail("frame", "NO_FACTION", faction=victim)
+        if victim == accused:
+            return self._fail("frame", "SAME", faction=victim)
+        if not self.envoys[victim]["alive"]:
+            return self._fail("frame", "NO_ENVOY", faction=victim)
+        self._kill_envoy(victim)
+        masked = opts.get("masked", True) or p.frame_ignores_mask
+        if masked:
+            r = self._register(victim, accused)
+            cap = 1e9 if p.frame_cap_separate else p.incite_cap
+            dh = min(p.frame_h, cap - r.i)
+            if dh > 1e-9:
+                old = r.i
+                r.i += dh
+                self.rec(7, "08", f"rel.{victim}>{accused}.i", old, r.i, "PLAYER_FRAME")
+            self.events.append(dict(kind="frame", tick=self.tick, faction=victim, accused=accused))
+        else:
+            self.events.append(dict(kind="frame_exposed", tick=self.tick, faction=victim, accused=accused))
+        if p.reputation_enabled:
+            self._rep_kill(victim, self._envoy_name(victim), {"masked": opts.get("masked", True), "witnesses": opts.get("witnesses", 1)})
+
     # ---------- 02: репутация и узнаваемость (spec 02) ----------
     def _rep_kill(self, fname: str, name: str, opts: dict):
         """Убийство именного игроком при reputation_enabled: слух вместо мгновенного штрафа (§1.2)."""
@@ -692,6 +760,12 @@ class World:
         # фаза 1 — затухание шока, восстановление региона
         if self.p.reputation_enabled and not self.p.player_levers_enabled:
             raise ValueError("reputation_enabled требует player_levers_enabled (spec 02)")
+        if self.p.envoys_enabled:
+            if not (self.p.reputation_enabled and self.p.player_levers_enabled and self.p.leader_enabled):
+                raise ValueError("envoys_enabled требует reputation_enabled, player_levers_enabled и leader_enabled (spec 03d)")
+            self._envoy_init()
+            if self.p.envoy_autokill_tick and self.tick == self.p.envoy_autokill_tick:
+                self._kill_envoy(sorted(self.factions)[0])
         if self.p.npc_state_enabled:
             if not self.p.leader_enabled:
                 raise ValueError("npc_state_enabled требует leader_enabled (нужны именные, spec 01)")
@@ -760,6 +834,8 @@ class World:
             self._hegemon_step()
         if self.p.reputation_enabled:
             self._rep_step()
+        if self.p.envoys_enabled:
+            self._hub_step()
         if self.p.npc_state_enabled:
             self._npc_packages()
 
@@ -1402,11 +1478,21 @@ class World:
             _, fname, name, *rest = act
             if rest and not self.p.reputation_enabled:
                 raise ValueError("параметры убийства (маска, свидетели) требуют reputation_enabled (spec 02)")
+            if self.p.envoys_enabled and name == self._envoy_name(fname):   # убийство представителя: инцидент через 02 (spec 03d §1.3)
+                if self._kill_envoy(fname):
+                    self._rep_kill(fname, name, rest[0] if rest else {})
+                else:
+                    self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
+                return
             if not self.kill_named(self.factions[fname], name, "LEADER_PLAYER", 7):
                 self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
             elif self.p.reputation_enabled:
                 self._rep_kill(fname, name, rest[0] if rest else {})
             return
+        if kind == "frame":
+            if not self.p.envoys_enabled:
+                raise ValueError("действие frame требует envoys_enabled (spec 03d)")
+            return self._frame(*act[1:])
         if kind == "silence":
             if not self.p.reputation_enabled:
                 raise ValueError("действие silence требует reputation_enabled (spec 02)")

@@ -352,7 +352,7 @@ def test_wars_requirements():
 
 
 # ---------- задачи очереди (plans/QUEUE.md): общие тесты ----------
-BASELINES = ("13a", "15", "14", "01n", "02")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
+BASELINES = ("13a", "15", "14", "01n", "02", "03d")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
 
 
 def _baseline_pairs():
@@ -410,6 +410,20 @@ def test_ry8_kill_options_require_flag():
         w.step()
     w, _ = build("RY8", Params())
     w.p = replace(w.p, reputation_enabled=True, player_levers_enabled=False)
+    with pytest.raises(ValueError):
+        w.step()
+
+
+def test_ed9_frame_requires_flag():
+    """ED9 (spec 03d): frame без envoys_enabled — ValueError; envoys_enabled без reputation_enabled — ValueError."""
+    from dataclasses import replace
+    from twin.scenarios import build
+    w, _ = build("ED9", Params())
+    w.player_script = {1: [("frame", "B", "C", {})]}
+    with pytest.raises(ValueError):
+        w.step()
+    w, _ = build("ED9", Params())
+    w.p = replace(w.p, envoys_enabled=True, reputation_enabled=False)
     with pytest.raises(ValueError):
         w.step()
 

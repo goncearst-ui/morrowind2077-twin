@@ -299,5 +299,16 @@ class Params:
     rep_ignore_witnesses: bool = False             # только для R94: число свидетелей игнорируется (silence отменяет сразу)
     rep_recover_off: bool = False                  # только для R95: региональная репутация не восстанавливается
 
+    # --- 03d: общий регион и представители (spec 03d) ---
+    envoys_enabled: bool = False                   # False = представителей и доски нет [предл]
+    hub_rumor_delay: int = 3                       # тиков от события до доски [предл]
+    frame_h: float = 5.0                           # подстава: +5 к H [док 08: разжигание войны]
+    hub_region: str = "hub"                        # регион хаба без экономики и объектов [предл]
+    hub_board_when_dead: bool = False              # только для R98: доска пишет и при мёртвом представителе
+    envoy_counts_manpower: bool = False            # только для R99: представитель входит в Manpower
+    frame_ignores_mask: bool = False               # только для R100: подстава всегда в маске (раскрытия нет)
+    frame_cap_separate: bool = False               # только для R101: потолок H подставы отдельный от подкупа
+    envoy_autokill_tick: int = 0                   # только для R102: автономное убийство представителя A на этом тике
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
