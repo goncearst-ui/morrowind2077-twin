@@ -332,5 +332,27 @@ class Params:
     chronicle_bug_dup: bool = False                # только для R112: T1 по записи журнала (дубли)
     chronicle_bug_unnorm: bool = False             # только для R113: слагаемые крепости не нормированы
 
+    # --- 16a цель лидера, KR, этап, жизненный цикл (spec 16a) ---
+    obj_enabled: bool = False                      # требует leader_enabled и evolution_enabled
+    obj_max_active: int = 2                        # [док 16] активных целей на мир
+    obj_max_duration_kr: int = 2                   # [док 16] KR с длительностью на фракцию
+    obj_stale_ticks: int = 200                     # [док 16/17] N×10, N = 20
+    obj_collapse_morale: float = 15.0              # [предл] удар по морали при коллапсе
+    obj_next: dict = field(default_factory=lambda: {1: 3, 3: 0, 5: 0, 4: 0, 2: 0, 0: 0})   # [предл] что после достигнутой цели
+    obj_kr: dict = field(default_factory=lambda: {   # [док 16, 17; числа предл] наборы KR по целям; вид KR — см. twin/objective.py
+        1: (("owns",), ("hold", "ctl", ">", 60.0, 20), ("rival_below", 0.5)),
+        2: (("prosperity_at_least", 70.0), ("hold", "ctl", ">=", 60.0, 20)),
+        3: (("hold", "ctl", ">=", 70.0, 20), ("rival_arch", ("Дрейфующие",)), ("manpower_ratio_at_least", 0.8)),
+        4: (("owns",), ("supply_at_least", 20.0)),
+        5: (("owns",), ("rival_supply_low", 15.0, 20), ("mp_up_c_not_up",)),
+    })
+    obj_vassal_pairs: tuple = ()                   # [предл] пары (A, B) с флагом вассальной труа; до модуля 17 задаёт сценарий
+    obj_bug_ctr_keep: bool = False                 # только для R114: счётчик не сбрасывается при просадке
+    obj_bug_stage_every_tick: bool = False         # только для R115: этап пишется каждый тик
+    obj_bug_no_stale: bool = False                 # только для R116: протухание выключено
+    obj_bug_no_cap: bool = False                   # только для R117: потолок активных целей снят
+    obj_bug_no_collapse_morale: bool = False       # только для R118: мораль коллапса 0
+    obj_bug_no_target_left: bool = False           # только для R119: причина TARGET_LEFT не различается
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

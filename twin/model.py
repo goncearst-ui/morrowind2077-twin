@@ -70,6 +70,16 @@ class Faction:
     arc_hard: dict = field(default_factory=dict)   # закалённые внутри трейт-ведра: {"steady": n, "ordinary": n} (spec 18)
     arc_brk: dict = field(default_factory=dict)    # сломленные: {"skittish": n}
     ctl: float | None = None        # ось C, TF_Control (21a); None = ещё не задана
+    objective: int = 0              # цель лидера 0–5 (spec 16a): 0 ВЫЖИВАНИЕ … 5 ОСВОБОЖДЕНИЕ
+    obj_stage: int = 0              # этап 0–3: число выполненных KR
+    obj_ctr: dict = field(default_factory=dict)      # счётчики длительности по номеру KR (с 1)
+    obj_stage_tick: int = 0         # тик установки цели или последнего роста этапа (возраст = тик − это)
+    obj_target: str | None = None   # имя объекта цели (задаёт сценарий)
+    obj_rival: str | None = None    # соперник (задаёт сценарий)
+    obj_rival_start: int = 0        # Manpower соперника при установке цели
+    obj_rival_depot: str | None = None   # депо соперника при установке цели (для OBJ_TARGET_LEFT)
+    obj_start: dict = field(default_factory=dict)    # свои числа при установке: mp, ctl
+    obj_met: list = field(default_factory=list)      # производный кэш: какие KR выполнены на прошлом шаге (нужен для причины KR_<n>)
     ax_r: float = 0.0               # ось R (21a), публикуемая производная
     ax_p: float = 0.0               # ось P (21a)
     pending: str | None = None      # уклад, к которому идёт смена (зеркало TF_PendingArch, 21a)
@@ -907,6 +917,10 @@ class World:
             self._arc_step()
         if self.p.npc_state_enabled:
             self._npc_packages()
+        if self.p.obj_enabled:
+            if not self.p.leader_enabled:
+                raise ValueError("obj_enabled требует leader_enabled (spec 16a)")
+            self.objective_step()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
@@ -1715,6 +1729,85 @@ class World:
         if f.name not in self.succ_queue:
             self.succ_queue.append(f.name)
 
+    # ---------- 16a: цель лидера, KR, этап, жизненный цикл ----------
+    def set_objective(self, fname, obj, target=None, rival=None):
+        """Установка цели сценарием (в игре — авторинг). ValueError: выключатель, потолки."""
+        from . import objective as O
+        p = self.p
+        if not p.obj_enabled:
+            raise ValueError("obj_enabled = False: цель не задаётся (spec 16a)")
+        f = self.factions[fname]
+        if obj not in O.NAMES:
+            raise ValueError(f"неизвестная цель {obj}")
+        krs = p.obj_kr.get(obj, ())
+        if sum(1 for k in krs if O.duration_kr(k)) > p.obj_max_duration_kr:
+            raise ValueError(f"цель {obj}: KR с длительностью больше {p.obj_max_duration_kr} на фракцию (spec 16a)")
+        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        if O.is_active(f, obj) and others + 1 > p.obj_max_active and not p.obj_bug_no_cap:
+            raise ValueError(f"активных целей не больше {p.obj_max_active} на мир (spec 16a)")
+        f.obj_target, f.obj_rival = target, rival
+        r = self.factions.get(rival) if rival else None
+        f.obj_rival_start = r.manpower if r else 0
+        f.obj_rival_depot = r.depot if r else None
+        f.obj_start = dict(mp=f.manpower, ctl=f.ctl if f.ctl is not None else p.evo_c_rest[f.archetype])
+        self._obj_reset(f, obj, "OBJ_SET", 7)
+
+    def _obj_reset(self, f: Faction, new_obj, reason, phase):
+        """Смена цели: этап и счётчики в ноль, возраст с этого тика. Строки журнала только при изменении."""
+        self.rec(phase, "16", f"{f.name}.objective", f.objective, new_obj, reason)
+        f.objective = new_obj
+        self.rec(phase, "16", f"{f.name}.obj_stage", f.obj_stage, 0, reason)
+        f.obj_stage = 0
+        for k in sorted(f.obj_ctr):
+            self.rec(phase, "16", f"{f.name}.obj_ctr.{k}", f.obj_ctr[k], 0, reason)
+        f.obj_ctr = {}
+        f.obj_met = []
+        f.obj_stage_tick = self.tick
+
+    def objective_step(self):
+        """Конец тика (фаза 8, после штурмов и налётов этого тика — иначе IN2 «этап растёт на тике захвата» не выполнить): пересчёт KR, счётчиков, этапа; достигнута / протухла (spec 16a п. 4–5). Решения следующего тика (16b) видят этап этого."""
+        from . import objective as O
+        p = self.p
+        for f in self.factions.values():
+            if f.objective == 0:
+                continue
+            krs = p.obj_kr[f.objective]
+            met = []
+            for i, kr in enumerate(krs, 1):
+                c = O.cond(self, f, kr)
+                if O.duration_kr(kr):
+                    old = f.obj_ctr.get(i, 0)
+                    new = old + 1 if c else (old if p.obj_bug_ctr_keep else 0)
+                    if new != old:
+                        f.obj_ctr[i] = new
+                        self.rec(8, "16", f"{f.name}.obj_ctr.{i}", old, new, "OBJ_CTR")
+                    met.append(new >= kr[-1])
+                else:
+                    met.append(c)
+            stage = sum(met)
+            prev = f.obj_met or [False] * len(met)
+            if stage != f.obj_stage:
+                n = next(i for i, (a, b) in enumerate(zip(prev, met), 1) if a != b)
+                old = f.obj_stage
+                f.obj_stage = stage
+                self.rec(8, "16", f"{f.name}.obj_stage", old, stage, f"KR_{n}")
+                if stage > old:
+                    f.obj_stage_tick = self.tick
+            elif p.obj_bug_stage_every_tick:
+                self.log.append((self.tick, 8, "16", f"{f.name}.obj_stage", stage, stage, "KR_0"))
+            f.obj_met = met
+            if krs and stage == len(krs):
+                nxt = p.obj_next[f.objective]
+                self.events.append(dict(kind="objective_done", tick=self.tick, faction=f.name, old=f.objective, new=nxt))
+                self._obj_reset(f, nxt, "OBJ_DONE", 8)
+                continue
+            if not p.obj_bug_no_stale and self.tick - f.obj_stage_tick + 1 >= p.obj_stale_ticks:
+                r = self.factions.get(f.obj_rival) if f.obj_rival else None
+                left = r is not None and r.depot != f.obj_rival_depot and not p.obj_bug_no_target_left
+                reason = "OBJ_TARGET_LEFT" if left else "OBJ_STALE"
+                self.events.append(dict(kind="objective_stale", tick=self.tick, faction=f.name, old=f.objective, reason=reason))
+                self._obj_reset(f, 0, reason, 8)
+
     def _apply_succession(self, f: Faction) -> bool:
         """ApplySuccession (фаза 6): правило 1 или 2, мимо выдержки и паузы. True = стек для фракции в этот тик не вычисляется."""
         p = self.p
@@ -1729,6 +1822,13 @@ class World:
             f.leader = succ["name"]
             self.rec(6, "05", f"{f.name}.leader", None, succ["name"], "RULE_2")
             cand, rule = p.succession_arch[succ["profile"]], 2
+        if p.obj_enabled and f.objective != 0:   # spec 16a п. 5б: цель вожака не переходит к преемнику (до 16c)
+            if succ is None:
+                if not p.obj_bug_no_collapse_morale:
+                    self.setf(f, "morale", max(0.0, f.morale - p.obj_collapse_morale), 6, "16", "OBJ_COLLAPSE")
+                self._obj_reset(f, 0, "OBJ_COLLAPSE", 6)
+            else:
+                self._obj_reset(f, 0, "OBJ_SUCCESSOR", 6)
         self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
         keep = (f.pending, f.pending_ticks)
         if p.succession_resets_pending:
