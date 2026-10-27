@@ -352,7 +352,7 @@ def test_wars_requirements():
 
 
 # ---------- задачи очереди (plans/QUEUE.md): общие тесты ----------
-BASELINES = ("13a", "15", "14", "01n", "02", "03d")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
+BASELINES = ("13a", "15", "14", "01n", "02", "03d", "18")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
 
 
 def _baseline_pairs():

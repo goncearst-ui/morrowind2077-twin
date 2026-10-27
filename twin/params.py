@@ -310,5 +310,17 @@ class Params:
     frame_cap_separate: bool = False               # только для R101: потолок H подставы отдельный от подкупа
     envoy_autokill_tick: int = 0                   # только для R102: автономное убийство представителя A на этом тике
 
+    # --- 18: личная арка (spec 18) ---
+    arc_enabled: bool = False                      # False = арки нет, power() прежняя [предл]
+    arc_severe_loss: float = 0.30                  # потери яруса за штурм, при которых событие тяжёлое [док 18]
+    arc_harden_steady: float = 0.15                # доля Steady → закалённые [док 18; гипотеза]
+    arc_harden_ordinary: float = 0.05              # [док 18; гипотеза]
+    arc_break_skittish: float = 0.20               # доля Skittish → сломленные [док 18; гипотеза]
+    arc_vet_w: float = 0.3                         # вес закалённых в ФакторАрки [док 13, 18]
+    arc_brk_w: float = 0.3                         # вес сломленных [док 13, 18]
+    arc_count_marked: bool = False                 # только для R105: помеченные снова считаются выжившими
+    arc_clamp: bool = True                         # только для R106: клэмп арки до размера ведра
+    arc_revert_ticks: int = 0                      # только для R108: откат keyword'ов именных через N тиков
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

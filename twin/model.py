@@ -67,6 +67,8 @@ class Faction:
     last_paid: dict = field(default_factory=lambda: {"rank": 0, "vet": 0, "off": 0})        # тик последней выплаты по ярусу
     underpaid: dict = field(default_factory=lambda: {"rank": False, "vet": False, "off": False})
     reorg_queue: list = field(default_factory=list)  # тики срабатывания отложенных реорганизаций
+    arc_hard: dict = field(default_factory=dict)   # закалённые внутри трейт-ведра: {"steady": n, "ordinary": n} (spec 18)
+    arc_brk: dict = field(default_factory=dict)    # сломленные: {"skittish": n}
     ctl: float | None = None        # ось C, TF_Control (21a); None = ещё не задана
     ax_r: float = 0.0               # ось R (21a), публикуемая производная
     ax_p: float = 0.0               # ось P (21a)
@@ -469,6 +471,71 @@ class World:
                     self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
         self.share_prev_owner = {s.name: s.owner for s in self.sites}
 
+    # ---------- 18: личная арка (spec 18) ----------
+    def _comp(self, f: Faction):
+        return (f.steady, f.ordinary, f.skittish)
+
+    def _arc_set(self, f: Faction, hard: dict, brk: dict, reason: str):
+        old_h, old_b = sum(f.arc_hard.values()), sum(f.arc_brk.values())
+        f.arc_hard, f.arc_brk = hard, brk
+        self.rec(7, "18", f"{f.name}.arc.hard", old_h, sum(hard.values()), reason)
+        self.rec(7, "18", f"{f.name}.arc.brk", old_b, sum(brk.values()), reason)
+        self._arc_ratio(f, reason if reason != "ARC_PROMOTE" else "ARC_RATIO")
+
+    def _arc_ratio(self, f: Faction, reason="ARC_RATIO"):
+        mp = max(1, f.manpower)
+        vr, br = (sum(f.arc_hard.values())) / mp, sum(f.arc_brk.values()) / mp
+        for tgt, v in (("vet_ratio", vr), ("brk_ratio", br)):
+            old = getattr(f, "_pub_" + tgt, 0.0)
+            if abs(old - v) > 1e-12:
+                self.rec(7, "18", f"{f.name}.{tgt}", old, v, "ARC_RATIO")
+                setattr(f, "_pub_" + tgt, v)
+
+    def _arc_after(self, f: Faction, before):
+        """После разрешения штурма: тяжёлые ярусы → вёдра арки; именные (при npc_state_enabled) → ApplyArc."""
+        from .arc import promote, clamp
+        p = self.p
+        after = self._comp(f)
+        hard, brk, heavy = promote(before, after, f.arc_hard, f.arc_brk, p)
+        hard, brk = clamp(after, hard, brk, p.arc_clamp)
+        if hard != f.arc_hard or brk != f.arc_brk:
+            self._arc_set(f, hard, brk, "ARC_PROMOTE")
+        else:
+            self._arc_ratio(f)
+        if heavy and p.npc_state_enabled:
+            from .npc import bucket_of
+            self._npc_init()
+            for n in f.named:
+                if not n["alive"] or n.get("arc"):
+                    continue
+                b = bucket_of(n["traits"])
+                if b == "steady" and "steady" in heavy:
+                    n["traits"] = tuple(t for t in n["traits"] if t != "Neuroticism_High") + tuple(t for t in ("Neuroticism_Low", "TF_Hardened") if t not in n["traits"])
+                    n["arc"], n["arc_tick"], n["arc_orig"] = "hardened", self.tick, n.get("arc_orig") or ()
+                elif b == "skittish" and "skittish" in heavy:
+                    n["traits"] = tuple(t for t in n["traits"] if t != "Neuroticism_Low") + tuple(t for t in ("Neuroticism_High", "TF_Broken") if t not in n["traits"])
+                    n["arc"], n["arc_tick"], n["arc_orig"] = "broken", self.tick, ()
+                else:
+                    continue
+                self.rec(7, "18", f"{f.name}.named.{n['name']}.arc", "-", n["arc"], "ARC_APPLY")
+
+    def _arc_step(self):
+        """Конец тика: клэмп вёдер к размеру трейт-вёдер (потери вне штурма), публикация долей; откат только для R108."""
+        from .arc import clamp
+        p = self.p
+        for f in self.factions.values():
+            hard, brk = clamp(self._comp(f), f.arc_hard, f.arc_brk, p.arc_clamp)
+            if hard != f.arc_hard or brk != f.arc_brk:
+                self._arc_set(f, hard, brk, "ARC_CLAMP")
+            else:
+                self._arc_ratio(f)
+            if p.arc_revert_ticks:
+                for n in f.named:
+                    if n.get("arc") and self.tick - n["arc_tick"] >= p.arc_revert_ticks:
+                        n["traits"] = tuple(t for t in n["traits"] if t not in ("TF_Hardened", "TF_Broken"))
+                        self.rec(8, "18", f"{f.name}.named.{n['name']}.arc", n["arc"], "-", "ARC_REVERT")
+                        n["arc"] = None
+
     # ---------- 03d: представители в хабе (spec 03d) ----------
     def _envoy_name(self, fname: str) -> str:
         return f"{fname}:представитель"
@@ -836,6 +903,8 @@ class World:
             self._rep_step()
         if self.p.envoys_enabled:
             self._hub_step()
+        if self.p.arc_enabled:
+            self._arc_step()
         if self.p.npc_state_enabled:
             self._npc_packages()
 
@@ -1095,7 +1164,13 @@ class World:
             n = sum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
         else:
             n = self.fighters(f)
-        return n * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
+        base = n * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
+        if self.p.arc_enabled and (f.arc_hard or f.arc_brk):
+            from .arc import factor
+            k = factor(f.arc_hard, f.arc_brk, f.manpower, self.p)
+            if k != 1.0:
+                base *= k   # ФакторАрки (spec 18 §1.5)
+        return base
 
     def decide_assault(self, f: Faction):
         p = self.p
@@ -1149,6 +1224,7 @@ class World:
         part = {a.name: min(a.manpower, p.strike_group_max),
                 d.name: self.crew(d, s) + p.defense_reinforcement}
         mp_before = {a.name: a.manpower, d.name: d.manpower}
+        comp0 = {a.name: self._comp(a), d.name: self._comp(d)}
         if p.old_loss_formula:
             loser_loss = floor(0.5 * lose.manpower)
             winner_loss = floor(0.5 * lose.manpower / ratio)
@@ -1166,6 +1242,9 @@ class World:
         sh = {}
         for f, k in ((lose, kl), (win, kw)):
             sh[f.name] = self.add_personnel_shock(f, k, mp_before[f.name], 1.0, 7, "ASSAULT")
+        if p.arc_enabled:
+            for fx in (win, lose):
+                self._arc_after(fx, comp0[fx.name])
         seat = d.depot == s.name   # spec 21b: вожак сидит на складе
         # удар по складу (06): только при победе атакующего и только если на объекте стоял склад; до трофея
         if attacker_wins and d.depot == s.name:

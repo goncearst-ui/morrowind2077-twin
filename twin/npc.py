@@ -31,6 +31,10 @@ def package_for(archetype, role_kw, traits, fear=None, loyalty=None, share_dropp
     t = set(traits)
     if fear is not None and fear >= avoid_fear:
         return "Avoid_Package"
+    if "TF_Broken" in t:
+        return "Broken_Drink_Pkg"
+    if "TF_Hardened" in t:
+        return "Hardened_Train_Pkg"
     if loyalty is not None and loyalty < disaffected_loyalty and share_dropped:
         return "Disaffected_Pkg"
     if archetype == "Хищники" and role_kw == "Role_Soldier" and "Neuroticism_Low" in t:
