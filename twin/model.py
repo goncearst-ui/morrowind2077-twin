@@ -1199,7 +1199,8 @@ class World:
                 self.setf(f, "cooldown", f.cooldown - 1, 5, "07", "COOLDOWN")
                 continue
             asset = bool(self.staffed(f))
-            rule = evo.first_rule(p, f.ax_r, f.ax_p, f.ctl, f.morale, asset, f.archetype, bool(self.owned(f)))
+            rule = evo.first_rule(p, f.ax_r, f.ax_p, f.ctl, f.morale, asset, f.archetype, bool(self.owned(f)),
+                                 f.armory >= p.assault_armory_min and f.manpower >= p.strike_group_max)
             if rule is not None:
                 self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
             cand = evo.RULE_TARGET[rule] if rule is not None else None

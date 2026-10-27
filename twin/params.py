@@ -194,6 +194,7 @@ class Params:
     evo_exit_guard_p: float = 50.0
     evo_exit_ctrl_c: float = 50.0                  # [предл] выход из Контролёров: нет актива или C < 50
     evo_drifter_needs_site: bool = True            # правило 7 для Дрейфующих только при наличии объекта [решение Стана 2026-10-27, вариант (а); правка docs/07 нужна]
+    evo_rule5_needs_force: bool = True             # вход в Хищники требует сил для налёта: Armory не ниже assault_armory_min [док 13] и людей не меньше strike_group_max [док 13] [решение Стана 2026-10-27, вариант (б); числа предл]
     evo_t_site: float = 25.0                       # tshock за потерянный объект (= shock_event_cap) [предл; решение Стана: территориальный шок вводим]
     evo_share_shock_k: float = 60.0                # [док 06] ShareShockK
 

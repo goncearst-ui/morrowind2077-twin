@@ -21,10 +21,12 @@ def axis_p(p, shock, tshock=0.0):
     return clamp(p.evo_p_scale * (shock + tshock))
 
 
-def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True):
+def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True, force=True):
     if rule == 3:
         return m < p.evo_rule3_m and c > p.evo_rule3_c
     if rule == 5:
+        if p.evo_rule5_needs_force and not force:
+            return False
         return r < p.evo_rule5_r and pp > p.evo_rule5_p
     if rule == 6:
         return asset and c > p.evo_rule6_c
@@ -37,9 +39,9 @@ def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True):
     raise ValueError(rule)
 
 
-def first_rule(p, r, pp, c, m, asset, arche=None, owns=True):
+def first_rule(p, r, pp, c, m, asset, arche=None, owns=True, force=True):
     for rule in p.evo_rule_order:
-        if fires(p, rule, r, pp, c, m, asset, arche, owns):
+        if fires(p, rule, r, pp, c, m, asset, arche, owns, force):
             return rule
     return None
 

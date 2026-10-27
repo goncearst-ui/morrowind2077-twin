@@ -53,7 +53,7 @@ WE_PINS = {"WE1": (), "WE2": _CH, "WE3a": _CH, "WE3b": _CH, "WE3c": _CH, "WE3d":
 WE_SCENARIOS = tuple(WE_BASE)
 RB_SCENARIOS = ("RB1", "RB2", "RB3", "RB4", "RB5")
 SW_SCENARIOS = ("SW1", "SW2")
-EV_PIN = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9")   # spec 21a: оси задаёт подвязка сценария
+EV_PIN = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV18")   # spec 21a: оси задаёт подвязка сценария
 EV_WORLD = ("EV12", "EV13")                                                  # spec 21a: мир SW со сменой уклада
 EV_MECH = ("EV14", "EV15", "EV16", "EV17")
 EV_SCENARIOS = EV_PIN + EV_WORLD + EV_MECH
@@ -436,6 +436,9 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             site7 = Site("Объект", 10, 0, 4, owner="A", income_disabled=True)
             w = World({"A": faction(p, "A", "Дрейфующие", 30, 20, 10), "B": faction(p, "B", "Дрейфующие", 30, 20, 0),
                        "C": faction(p, "C", "Дрейфующие", 30, 20, 0)}, [site7], p)
+        elif sc == "EV18":
+            w = World({"A": faction(p, "A", "Хранители", 30, 20, 0), "B": faction(p, "B", "Хранители", 30, 20, 0)}, [], p)
+            w.factions["A"].armory = 10.0   # нет оружия для налёта (< 25, docs/13)
         elif sc == "EV14":
             w = World({"A": faction(p, "A", "Хранители", 30, 40, 0)}, [], p)
             w.factions["A"].morale = 40.0
@@ -463,7 +466,10 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             "EV8": [(3, 3, 31, 60, 40), (11, 15, 2, 60, 70), (23, 15, 0, 20, 80), (35, 15, 0, 10, 30), (50, 27, 0, 10, 30)],
             "EV9": [(t, *( (3, 31, 60, 40) if (t - 1) // 25 % 2 == 0 else (27, 0, 60, 50) )) for t in range(25, 201, 25)],
         }
-        if sc == "EV7":
+        if sc == "EV18":
+            horizon = 8
+            w.scheduled = {t: [ev_pins("A", [(8, 5, 31, 60, 50)]), ev_pins("B", [(8, 5, 31, 60, 50)])] for t in range(1, 9)}
+        elif sc == "EV7":
             w.scheduled = {t: [ev_pins("A", [(12, 27, 0, 10, 20)]), ev_pins("B", [(12, 3, 31, 10, 20)]), ev_pins("C", [(12, 27, 0, 10, 20)])] for t in range(1, 13)}
             horizon = 12
         elif sc in pins:
@@ -1098,6 +1104,9 @@ def check(sc: str, w: World, series):
             a = mine("A")
             ok_("смена на Хищников ровно на тике 3 по правилу 5, до этого уклад не менялся", a == [(3, "Хранители", "Хищники", 5)], f"смены: {a}")
             ok_("pending = Хищники на тиках 1 и 2", [(r[0], r[5]) for r in rows("A.pending") if r[0] <= 2] == [(1, "Хищники")], f"pending: {[(r[0], r[5]) for r in rows('A.pending')]}")
+        elif sc == "EV18":
+            ok_("с оружием 50 и 30 людьми B уходит в Хищники на тике 3", mine("B") == [(3, "Хранители", "Хищники", 5)], f"B: {mine('B')}")
+            ok_("с оружием 10 A при тех же осях остаётся Хранителем: хищничать нечем", mine("A") == [], f"A: {mine('A')}")
         elif sc == "EV2":
             a = mine("A")
             ok_("тиков 1–20 уклад Хищники, смены нет: гистерезис держит", not [x for x in a if x[0] <= 20], f"смены: {a}")
@@ -1261,6 +1270,7 @@ REVERSE = {
     "R43": (replace(Params(), evo_rule_order=(8, 3, 5, 6, 7)), ("EV5",), "catch-all (правило 8) стоит первым"),
     "R44": (replace(Params(), evo_m_recover=0.0), ("EV14",), "мораль не растёт"),
     "R46": (replace(Params(), evo_drifter_needs_site=False), ("EV7",), "Дрейфующие без объекта тоже уходят по правилу 7 (ловушка открыта)"),
+    "R48": (replace(Params(), evo_rule5_needs_force=False), ("EV18",), "вход в Хищники не требует сил для налёта"),
     "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
 }
