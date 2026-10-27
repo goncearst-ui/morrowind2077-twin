@@ -354,5 +354,23 @@ class Params:
     obj_bug_no_collapse_morale: bool = False       # только для R118: мораль коллапса 0
     obj_bug_no_target_left: bool = False           # только для R119: причина TARGET_LEFT не различается
 
+    # --- 16b стратегия: таблица (цель × трейт вожака) → множители порогов (spec 16b) ---
+    strategy_enabled: bool = False                 # требует obj_enabled и npc_state_enabled
+    strategy_table: tuple = (                      # (цель, трейт или None, thr_mult, thr_min, war_acc_mult); порядок = приоритет [док 16, 17; числа предл]
+        (1, "Neuroticism_High", 0.85, 0.0, 1.0),
+        (1, "Openness_High", 1.2, 0.0, 0.5),
+        (1, "Conscientiousness_High", 1.0, 1.5, 1.0),
+        (3, "Agreeableness_Low", 0.85, 0.0, 1.5),
+        (3, "Openness_High", 1.2, 0.0, 0.5),
+        (4, None, 2.0, 0.0, 1.0),
+        (5, "Agreeableness_High", 1.0, 0.0, 0.5),
+        (5, "Agreeableness_Low", 0.85, 0.0, 1.5),
+    )
+    strategy_bug_no_mult: bool = False             # только для R120: thr_mult не применяется
+    strategy_bug_no_min: bool = False              # только для R121: thr_min не применяется
+    strategy_bug_no_acc: bool = False              # только для R122: war_acc_mult не применяется
+    strategy_bug_ignore_traits: bool = False       # только для R123: таблица игнорирует трейты
+    strategy_bug_no_log: bool = False              # только для R124: вектор не пишется в журнал
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

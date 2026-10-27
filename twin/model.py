@@ -79,6 +79,7 @@ class Faction:
     obj_rival_start: int = 0        # Manpower соперника при установке цели
     obj_rival_depot: str | None = None   # депо соперника при установке цели (для OBJ_TARGET_LEFT)
     obj_start: dict = field(default_factory=dict)    # свои числа при установке: mp, ctl
+    strategy_txt: str = "1/0/1"      # последний записанный вектор стратегии (spec 16b), нейтральный по умолчанию
     obj_met: list = field(default_factory=list)      # производный кэш: какие KR выполнены на прошлом шаге (нужен для причины KR_<n>)
     ax_r: float = 0.0               # ось R (21a), публикуемая производная
     ax_p: float = 0.0               # ось P (21a)
@@ -882,6 +883,10 @@ class World:
         # фаза 7 — решения
         if self.p.evolution_enabled and sum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
             raise ValueError("доктрина != 0 разрешена не более чем одной фракции (док 07)")
+        if self.p.strategy_enabled:
+            if not (self.p.obj_enabled and self.p.npc_state_enabled):
+                raise ValueError("strategy_enabled требует obj_enabled и npc_state_enabled (spec 16b)")
+            self._strategy_step()
         for act in self.player_script.get(self.tick, []):
             self.player_action(act)
         for f in fs:
@@ -1195,6 +1200,9 @@ class World:
             return
         if self.tick - f.last_assault < p.assault_cooldown:
             return
+        if p.strategy_enabled:   # spec 16b: порог = max(thr_min, порог × thr_mult)
+            tm, tmin, _ = self._strategy(f)
+            thr = max(0.0 if p.strategy_bug_no_min else tmin, thr if p.strategy_bug_no_mult else thr * tm)
         goal = self._steer_goal(f)   # spec 08d: сначала цель войны
         if goal is not None:
             d = self.factions[goal.owner]
@@ -1541,6 +1549,8 @@ class World:
                 acc = self.war_acc.get((a, b), 0.0)
                 if acc < 100.0:
                     add = min(p.war_chance_cap, p.war_chance_base + p.war_chance_slope * (h - p.rel_level_cuts[2]))
+                    if p.strategy_enabled and not p.strategy_bug_no_acc:   # spec 16b: прибавка × war_acc_mult зачинщика
+                        add *= self._strategy(fa)[2]
                     self.war_acc[(a, b)] = acc + add
                     self.rec(8, "08b", f"war.{a}>{b}.acc", acc, acc + add, "WAR_ACC")
                     acc += add
@@ -1751,6 +1761,23 @@ class World:
         f.obj_rival_depot = r.depot if r else None
         f.obj_start = dict(mp=f.manpower, ctl=f.ctl if f.ctl is not None else p.evo_c_rest[f.archetype])
         self._obj_reset(f, obj, "OBJ_SET", 7)
+
+    def _strategy(self, f: Faction):
+        """Spec 16b: вектор (thr_mult, thr_min, war_acc_mult) = строка таблицы (цель × трейты вожака); не хранится, считается по текущим данным."""
+        from . import objective as O
+        ld = next((n for n in f.named if n["name"] == f.leader and n["alive"]), None) if f.leader else None
+        traits = tuple(ld.get("traits", ())) if ld else ()
+        return O.strategy_vector(self.p.strategy_table, f.objective, traits, f.doctrine, self.p.strategy_bug_ignore_traits)
+
+    def _strategy_step(self):
+        """Начало фазы 7: вектор пишется в журнал, только когда изменился (смена цели, вожака, трейтов)."""
+        for f in self.factions.values():
+            v = self._strategy(f)
+            txt = "/".join(f"{x:g}" for x in v)
+            if txt != f.strategy_txt:
+                if not self.p.strategy_bug_no_log:
+                    self.rec(7, "16", f"{f.name}.strategy", f.strategy_txt, txt, "STRATEGY")
+                f.strategy_txt = txt
 
     def _obj_reset(self, f: Faction, new_obj, reason, phase):
         """Смена цели: этап и счётчики в ноль, возраст с этого тика. Строки журнала только при изменении."""

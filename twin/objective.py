@@ -47,3 +47,16 @@ def cond(w, f, kr):
     if k == "mp_up_c_not_up":
         return bool(f.obj_start) and f.manpower > f.obj_start["mp"] and f.ctl is not None and f.ctl <= f.obj_start["ctl"]
     raise ValueError(f"неизвестный вид KR: {k}")
+
+
+NEUTRAL = (1.0, 0.0, 1.0)
+
+
+def strategy_vector(table, objective, traits, doctrine, ignore_traits=False):
+    """Spec 16b: (thr_mult, thr_min, war_acc_mult) по первой подходящей строке; пассивные цели и неописанные сочетания — нейтральный."""
+    if objective == 0 or (objective == 2 and doctrine == 2):
+        return NEUTRAL
+    for obj, trait, tm, tmin, am in table:
+        if obj == objective and (trait is None or ignore_traits or trait in traits):
+            return (tm, tmin, am)
+    return NEUTRAL
