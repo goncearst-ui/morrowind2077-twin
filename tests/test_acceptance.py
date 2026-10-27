@@ -383,3 +383,19 @@ def test_extra_deterministic(sc):
     w1, _ = run(sc)
     w2, _ = run(sc)
     assert w1.log == w2.log
+
+
+@pytest.mark.parametrize("layout", [1, 2, 3, 4, 5])
+def test_bn4_wars_off_is_clean(layout):
+    """BN4 (spec 08f): журнал режима «войны выкл» совпадает с журналом режима «войны вкл» без строк 08b при war_cost = 0, репарациях 0 и без управления нападениями."""
+    from twin.bench import bn4
+    assert bn4(layout)
+
+
+def test_bn1_bench_report_runs():
+    """BN1/BN5 (spec 08f): bench.py печатает отчёт по 5 раскладам × 2 режима со всеми строками; «войн: 0» не опускается."""
+    import bench
+    text = bench.report()
+    assert text.count("расклад ") == 10
+    for key in ("войн:", "концы:", "штурмов:", "потери людей по причинам:", "минимум запаса", "вымерли до конца:", "сводка по пяти раскладам"):
+        assert key in text, key
