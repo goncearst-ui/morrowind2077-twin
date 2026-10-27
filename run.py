@@ -34,3 +34,11 @@ for sc in ("DS1", "DS2", "DS4", "OB1", "OB2", "IC5", "RD1", "RD3S", "RP1", "RP2"
     att = [e for e in w.events if e["kind"] in ("raid_object", "assault")]
     bl = [e for e in w.events if e["kind"] == "blind_attack"]
     print(f"   {sc}: нападений {len(att)}, слепых {len(bl)} (принудительных слепых {sum(1 for e in bl if e['forced'])})")
+
+# задачи очереди (twin/extra.py): сценарии 13a и далее
+from twin.scenarios import EXTRA
+for sc in sorted(EXTRA):
+    ok, res, m, w, s = evaluate(sc)
+    print(f"{sc}: {'ЗЕЛЁНЫЙ' if ok else 'КРАСНЫЙ'}")
+    for name, k, det in res:
+        print(f"   {'OK ' if k else 'RED'} {name} — {det}")

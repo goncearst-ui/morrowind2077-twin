@@ -116,7 +116,16 @@ SOLO = {  # spec 03a: (уклад, численность, объекты)
 }
 
 
+EXTRA = {}           # sc -> (build(p) -> (w, horizon), check(w, series) -> [(имя, ok, деталь)]); сценарии задач 13a и далее (twin/x*.py)
+REVERSE_EXTRA = {}   # ключ R -> (Params, (сценарии,), описание)
+
+
 def build(sc: str, p: Params) -> tuple[World, int]:
+    if sc in EXTRA:
+        w, horizon = EXTRA[sc][0](p)
+        for f in w.factions.values():
+            w.publish_dos(f, phase=0)
+        return w, horizon
     ss = sites()
     if sc == "DS1":
         a = faction(p, "A", "Хищники", 40, 20, 15)
@@ -727,6 +736,8 @@ def metrics(w: World, series):
 def check(sc: str, w: World, series):
     """Список (проверка, ok, деталь). Красная строка называет пробитый потолок."""
     p, m, res = w.p, metrics(w, series), []
+    if sc in EXTRA:
+        return EXTRA[sc][1](w, series), m
     cap = p.assault_loss_cap
     if sc == "DS1":
         a = m["A"]
@@ -1639,3 +1650,8 @@ REVERSE = {
     "R53": (replace(Params(), leader_kill_any_war_end=True), ("EV26b", "EV26c"), "вожак гибнет при любом конце войны"),
     "R54": (replace(Params(), leader_kill_any_site=True), ("EV24",), "штурм любого объекта убивает вожака"),
 }
+
+
+from . import extra  # noqa: E402,F401  (регистрирует сценарии задач 13a и далее)
+
+REVERSE.update(REVERSE_EXTRA)

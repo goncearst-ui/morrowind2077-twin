@@ -136,6 +136,8 @@ class World:
     player_rep: dict = field(default_factory=dict)       # фракция -> репутация игрока; нет записи = rep_default (spec 21d, заглушка 02)
     bribe_last: dict = field(default_factory=dict)       # фракция -> тик последнего подкупа
     persuade_last: dict = field(default_factory=dict)    # фракция -> тик последнего успешного убеждения
+    share_pub: dict = field(default_factory=dict)        # (регион, фракция) -> последняя опубликованная доля (spec 13a)
+    share_prev_owner: dict = field(default_factory=dict) # имя объекта -> владелец на конец прошлого тика (R71)
 
     @property
     def prosperity(self) -> float:
@@ -412,6 +414,41 @@ class World:
                 left -= s.min_crew
         return out
 
+    # ---------- 13a: доля фракции в регионе (производная, без памяти) ----------
+    def shares(self, owners: dict | None = None) -> dict:
+        """{регион: {фракция: доля}}. Доля = объектов региона у фракции ÷ всех объектов региона; бесхозные считаются в знаменателе (spec 13a §1.1)."""
+        out = {}
+        for r in sorted({s.region for s in self.sites}):
+            ss = [s for s in self.sites if s.region == r]
+            own = [(owners.get(s.name, s.owner) if owners is not None else s.owner) for s in ss]
+            den = sum(1 for o in own if o is not None) if self.p.share_denominator_owned_only else len(ss)
+            out[r] = {f: own.count(f) / den for f in self.factions if own.count(f)}
+        return out
+
+    def dominant(self, region: str, owners: dict | None = None):
+        """Хозяин региона: фракция с долей строго больше порога (spec 13a §1.3)."""
+        t = self.p.dominant_threshold
+        for f, v in self.shares(owners).get(region, {}).items():
+            if v > t + 1e-12 or (self.p.dominant_ge and v >= t - 1e-12):
+                return f
+        return None
+
+    def _publish_shares(self):
+        p = self.p
+        owners = self.share_prev_owner if (p.share_lag and self.share_prev_owner) else None
+        cur = self.shares(owners)
+        regions = sorted({r for r, _ in self.share_pub} | set(cur))
+        for r in regions:
+            for f in sorted(self.factions):
+                new = cur.get(r, {}).get(f, 0.0)
+                old = self.share_pub.get((r, f), 0.0)
+                if p.share_inertia:
+                    new = old + (new - old) * p.share_inertia
+                if abs(new - old) > 1e-12:
+                    self.share_pub[(r, f)] = new
+                    self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
+        self.share_prev_owner = {s.name: s.owner for s in self.sites}
+
     # ---------- 06: склад (spec 03b) ----------
     def best_depot(self, f: Faction, exclude: str | None = None) -> str:
         """Склад — на укомплектованном объекте с наибольшим доходом, при равенстве по имени;
@@ -447,7 +484,11 @@ class World:
             cap = self.p.crew_cap.get(s.name, s.min_crew)
             extra = max(0, min(left, cap - s.min_crew))
             left -= extra
-            out.append((s, extra, s.yield_ + self.p.worker_yield * extra))
+            inc = s.yield_ + self.p.worker_yield * extra
+            if self.p.region_share_enabled and self.p.share_income_k and not self.p.share_income_ignored:
+                k = self.p.share_income_k
+                inc *= 1 - k + k * self.shares().get(s.region, {}).get(f.name, 0.0)   # spec 13a §1.4
+            out.append((s, extra, inc))
         return out
 
     def forced_count(self, f: Faction) -> int:
@@ -539,6 +580,9 @@ class World:
         # фаза 8 — война как состояние пары (spec 08b): читает 08a и 08c, пишет в чужие модули только цену (06)
         if self.p.wars_enabled:
             self.war_step()
+        # фаза 8 — доли фракций в регионах (spec 13a): производная, ничего не меняет в других модулях
+        if self.p.region_share_enabled:
+            self._publish_shares()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):

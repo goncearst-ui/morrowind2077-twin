@@ -19,12 +19,16 @@
 2026-10-27: добавлены EV20–EV27 (EV26, EV26b, EV26c), EV30, EV31, EV28 (журналы EV1–EV19 при выключенном вожаке против tests/baseline_pre21b.json), EV29 (люди сохраняются: общие тесты по списку EV_SCENARIOS), обратные R50–R54 по утверждённому plan 21b (Стан: «утверждаю 21b», правка tests/test_acceptance.py и новый эталон разрешены). Прежние проверки не менялись.
 2026-10-27: добавлены PL1–PL11 (PL8, PL8b, PL8c), PL12 (журналы EV20–EV31 против tests/baseline_pre21d.json, ошибка действий без выключателя), обратные R55–R62 по утверждённому plan 21d (Стан: «утверждаю 21d», правка tests/test_acceptance.py и новый эталон разрешены). Прежние проверки не менялись.
 2026-10-27: добавлены CR1–CR5, CR7, CR7k, CR8, CR9 (список EV_SCENARIOS), CR6 (обход стека), CR10 (две доктрины — ошибка), CR11 (журналы EV1–EV31 и PL1–PL11 при порядке по умолчанию против tests/baseline_pre21c.json), обратные R63–R68 по утверждённому plan 21c (Стан: «утверждаю 21c», правка tests/test_acceptance.py и новый эталон разрешены). Прежние проверки не менялись.
-2026-10-27: добавлены EV19 и обратная R49 по утверждённому plan 21a-4 (решение Стана: Хищники без объектов не изгоняют людей, а продолжают контрабанду). Прежние проверки не менялись."""
+2026-10-27: добавлены EV19 и обратная R49 по утверждённому plan 21a-4 (решение Стана: Хищники без объектов не изгоняют людей, а продолжают контрабанду). Прежние проверки не менялись.
+2026-10-27: общий механизм для задач очереди plans/QUEUE.md (Стан: «исполняй все с разрешением на правку tests/test_acceptance.py и на эталон»): сценарии задач 13a и далее регистрируются в twin/extra.py (EXTRA) и проходят общие тесты зелёности, детерминизма и обратных проверок; эталоны tests/baseline_pre<NN>.json сверяются общим тестом test_flags_off_matches_baseline (список BASELINES). Прежние проверки не менялись."""
+import json
+from pathlib import Path
+
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
-from twin.scenarios import REVERSE, evaluate, run, ev10, ev11
+from twin.scenarios import REVERSE, evaluate, run, ev10, ev11, EXTRA
 
 SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e", "RB1", "RB2", "RB3", "RB4", "RB5", "SW1", "SW2")
 EV_SCENARIOS = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV12", "EV13", "EV14", "EV15", "EV16", "EV17", "EV18", "EV19",
@@ -345,3 +349,37 @@ def test_wars_requirements():
         w, _ = build("DS1", replace(Params(), **{"relations_enabled": True, "knowledge_enabled": True, "wars_enabled": True, **kw}))
         with pytest.raises(ValueError):
             w.step()
+
+
+# ---------- задачи очереди (plans/QUEUE.md): общие тесты ----------
+BASELINES = ("13a",)   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
+
+
+def _baseline_pairs():
+    out = []
+    for name in BASELINES:
+        base = json.loads((Path(__file__).parent / f"baseline_pre{name}.json").read_text(encoding="utf-8"))
+        out += [(name, sc) for sc in base]
+    return out
+
+
+@pytest.mark.parametrize("name,sc", _baseline_pairs())
+def test_flags_off_matches_baseline(name, sc):
+    """Все новые выключатели по умолчанию выключены: журнал каждого сценария совпадает строка в строку с эталоном, снятым до задачи <name>."""
+    base = json.loads((Path(__file__).parent / f"baseline_pre{name}.json").read_text(encoding="utf-8"))
+    w, _ = run(sc)
+    assert [list(r) for r in w.log] == base[sc]
+
+
+@pytest.mark.parametrize("sc", sorted(EXTRA))
+def test_extra_green(sc):
+    ok, res, *_ = evaluate(sc)
+    red = [f"{n}: {d}" for n, k, d in res if not k]
+    assert ok, f"{sc} красный — " + "; ".join(red)
+
+
+@pytest.mark.parametrize("sc", sorted(EXTRA))
+def test_extra_deterministic(sc):
+    w1, _ = run(sc)
+    w2, _ = run(sc)
+    assert w1.log == w2.log

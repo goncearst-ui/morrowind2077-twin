@@ -247,5 +247,15 @@ class Params:
     rep_default: float = 50.0                      # репутация игрока по умолчанию (заглушка, 02) [предл]
     rep_kill_loss: float = 30.0                    # убийство именного игроком [предл]
 
+    # --- 13a: доля фракции в регионе (spec 13a) ---
+    region_share_enabled: bool = False             # False = долей нет, журнал как до 13a [предл]
+    share_income_k: float = 0.0                    # доход объекта × (1 − k + k × доля владельца в регионе); 0 = не влияет [предл; пример 0.3]
+    dominant_threshold: float = 0.5                # хозяин региона — доля строго больше порога [предл]
+    share_denominator_owned_only: bool = False     # только для обратной проверки R70: бесхозные не считаются в знаменателе
+    share_lag: bool = False                        # только для R71: доли по владению прошлого тика
+    share_income_ignored: bool = False             # только для R72: k не применяется к доходу
+    dominant_ge: bool = False                      # только для R73: хозяин при доле ≥ порога
+    share_inertia: float = 0.0                     # только для R74: доля ползёт к цели на эту долю разрыва за тик
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
