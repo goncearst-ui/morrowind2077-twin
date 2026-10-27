@@ -286,5 +286,18 @@ class Params:
     npc_swap34: bool = False                       # только для R84: строки 3 и 4 таблицы ярлыков поменяны
     npc_steady_for_skittish: bool = False          # только для R85: ведро Skittish не выводится из Neuroticism_High
 
+    # --- 02: репутация и узнаваемость (spec 02) ---
+    reputation_enabled: bool = False               # False = штраф при убийстве сразу, как в 21d [предл]
+    rep_rumor_delay: int = 2                       # тиков до доставки слуха о действии игрока [док 02: 24–72 игровых часа; число предл]
+    rep_region_loss: float = 20.0                  # региональная репутация при опознании [предл]
+    region_rep_default: float = 50.0               # [предл]
+    region_rep_recover: float = 1.0                # шаг восстановления [док 02: естественное восстановление; число предл]
+    region_rep_recover_every: int = 10
+    bribe_rep_price_k: float = 1.0                 # подкуп дороже при падении региональной репутации [предл]
+    rep_masked_identifies: bool = False            # только для R92: маска не меняет опознание
+    rep_silence_cancels: bool = True               # только для R93: silence не отменяет слух
+    rep_ignore_witnesses: bool = False             # только для R94: число свидетелей игнорируется (silence отменяет сразу)
+    rep_recover_off: bool = False                  # только для R95: региональная репутация не восстанавливается
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

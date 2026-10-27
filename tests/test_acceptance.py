@@ -352,7 +352,7 @@ def test_wars_requirements():
 
 
 # ---------- задачи очереди (plans/QUEUE.md): общие тесты ----------
-BASELINES = ("13a", "15", "14", "01n")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
+BASELINES = ("13a", "15", "14", "01n", "02")   # имена эталонов tests/baseline_pre<NN>.json, добавляются по мере исполнения задач
 
 
 def _baseline_pairs():
@@ -363,12 +363,20 @@ def _baseline_pairs():
     return out
 
 
+_DEFAULT_LOGS = {}
+_BASES = {}
+
+
 @pytest.mark.parametrize("name,sc", _baseline_pairs())
 def test_flags_off_matches_baseline(name, sc):
-    """Все новые выключатели по умолчанию выключены: журнал каждого сценария совпадает строка в строку с эталоном, снятым до задачи <name>."""
-    base = json.loads((Path(__file__).parent / f"baseline_pre{name}.json").read_text(encoding="utf-8"))
-    w, _ = run(sc)
-    assert [list(r) for r in w.log] == base[sc]
+    """Все новые выключатели по умолчанию выключены: журнал каждого сценария совпадает строка в строку с эталоном, снятым до задачи <name>.
+    Журнал прогона по умолчанию кэшируется в пределах сессии (ускорение, критерий тот же)."""
+    if name not in _BASES:
+        _BASES[name] = json.loads((Path(__file__).parent / f"baseline_pre{name}.json").read_text(encoding="utf-8"))
+    if sc not in _DEFAULT_LOGS:
+        w, _ = run(sc)
+        _DEFAULT_LOGS[sc] = [list(r) for r in w.log]
+    assert _DEFAULT_LOGS[sc] == _BASES[name][sc]
 
 
 @pytest.mark.parametrize("sc", sorted(EXTRA))
@@ -390,6 +398,20 @@ def test_bn4_wars_off_is_clean(layout):
     """BN4 (spec 08f): журнал режима «войны выкл» совпадает с журналом режима «войны вкл» без строк 08b при war_cost = 0, репарациях 0 и без управления нападениями."""
     from twin.bench import bn4
     assert bn4(layout)
+
+
+def test_ry8_kill_options_require_flag():
+    """RY8 (spec 02): kill с четвёртым элементом (маска, свидетели) без reputation_enabled — ValueError; reputation_enabled без player_levers_enabled — ValueError."""
+    from dataclasses import replace
+    from twin.scenarios import build
+    w, _ = build("RY8", Params())
+    w.player_script = {1: [("kill", "B", "B:офицер1", {"masked": True})]}
+    with pytest.raises(ValueError):
+        w.step()
+    w, _ = build("RY8", Params())
+    w.p = replace(w.p, reputation_enabled=True, player_levers_enabled=False)
+    with pytest.raises(ValueError):
+        w.step()
 
 
 def test_np9_threaten_requires_flag():

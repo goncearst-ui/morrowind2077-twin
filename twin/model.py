@@ -139,6 +139,8 @@ class World:
     persuade_last: dict = field(default_factory=dict)    # фракция -> тик последнего успешного убеждения
     share_pub: dict = field(default_factory=dict)        # (регион, фракция) -> последняя опубликованная доля (spec 13a)
     share_prev_owner: dict = field(default_factory=dict) # имя объекта -> владелец на конец прошлого тика (R71)
+    rep_rumors: list = field(default_factory=list)       # слухи о действиях игрока в пути (spec 02)
+    region_rep: dict = field(default_factory=dict)       # регион -> региональная репутация игрока (spec 02)
     hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
     hegemon_tick: int = 0                                # тик последней смены статуса
     hegemon_last_cand: str | None = None                 # последний кандидат (только для R81)
@@ -463,6 +465,56 @@ class World:
                     self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
         self.share_prev_owner = {s.name: s.owner for s in self.sites}
 
+    # ---------- 02: репутация и узнаваемость (spec 02) ----------
+    def _rep_kill(self, fname: str, name: str, opts: dict):
+        """Убийство именного игроком при reputation_enabled: слух вместо мгновенного штрафа (§1.2)."""
+        p = self.p
+        w = opts.get("witnesses", 1)
+        if w < 1:
+            return
+        ident = (not opts.get("masked", False)) or p.rep_masked_identifies
+        self.rep_rumors.append(dict(faction=fname, born=self.tick, due=self.tick + p.rep_rumor_delay, identified=ident, witnesses=w))
+        self.rec(7, "02", f"rep.rumor.{fname}.{self.tick}", 0, 1, "RUMOR_NEW")
+
+    def _silence(self, fname: str):
+        live = [r for r in self.rep_rumors if r["faction"] == fname]
+        if not live:
+            return self._fail("silence", "NO_RUMOR", faction=fname)
+        r = max(live, key=lambda x: x["born"])
+        r["witnesses"] = 0 if self.p.rep_ignore_witnesses else r["witnesses"] - 1
+        if r["witnesses"] <= 0 and self.p.rep_silence_cancels:
+            self.rep_rumors.remove(r)
+            self.rec(7, "02", f"rep.rumor.{fname}.{r['born']}", 1, 0, "RUMOR_CANCELLED")
+            self.events.append(dict(kind="rep_cancelled", tick=self.tick, faction=fname))
+
+    def _rep_step(self):
+        """Фаза 8: доставка слухов по сроку; восстановление региональной репутации."""
+        p = self.p
+        for r in [x for x in self.rep_rumors if x["due"] <= self.tick]:
+            self.rep_rumors.remove(r)
+            f = self.factions[r["faction"]]
+            if r["identified"]:
+                old = self.player_rep.get(f.name, p.rep_default)
+                new = max(0.0, old - p.rep_kill_loss)
+                self.player_rep[f.name] = new
+                self.rec(8, "02", f"player.rep.{f.name}", old, new, "RUMOR_DELIVERED")
+                ro = self.region_rep.get(f.home, p.region_rep_default)
+                rn = max(0.0, ro - p.rep_region_loss)
+                self.region_rep[f.home] = rn
+                self.rec(8, "02", f"rep.region.{f.home}", ro, rn, "RUMOR_DELIVERED")
+                self.rec(8, "02", f"rep.rumor.{f.name}.{r['born']}", 1, 0, "RUMOR_DELIVERED")
+                self.events.append(dict(kind="rep_identified", tick=self.tick, faction=f.name))
+            else:
+                self.rec(8, "02", f"rep.rumor.{f.name}.{r['born']}", 1, 0, "RUMOR_UNIDENTIFIED")
+                self.events.append(dict(kind="rep_unidentified", tick=self.tick, faction=f.name))
+        if self.tick % p.region_rep_recover_every == 0 and not p.rep_recover_off:
+            for reg in sorted(self.region_rep):
+                v = self.region_rep[reg]
+                if v < p.region_rep_default:
+                    nv = min(p.region_rep_default, v + p.region_rep_recover)
+                    self.region_rep[reg] = nv
+                    self.rec(8, "02", f"rep.region.{reg}", v, nv, "REGION_REP")
+
     # ---------- 01: личное состояние именных (spec 01) ----------
     def _npc_init(self):
         p = self.p
@@ -638,6 +690,8 @@ class World:
             fn(self)
         fs = list(self.factions.values())
         # фаза 1 — затухание шока, восстановление региона
+        if self.p.reputation_enabled and not self.p.player_levers_enabled:
+            raise ValueError("reputation_enabled требует player_levers_enabled (spec 02)")
         if self.p.npc_state_enabled:
             if not self.p.leader_enabled:
                 raise ValueError("npc_state_enabled требует leader_enabled (нужны именные, spec 01)")
@@ -704,6 +758,8 @@ class World:
         # фаза 8 — хозяин планеты (spec 14): хранимый статус с запасом и паузой смены
         if self.p.planet_hegemon_enabled:
             self._hegemon_step()
+        if self.p.reputation_enabled:
+            self._rep_step()
         if self.p.npc_state_enabled:
             self._npc_packages()
 
@@ -1343,10 +1399,18 @@ class World:
         kill (фракция, имя); bribe (A, B, сумма); tip (A, объект); persuade (T, O). Отказ — событие player_failed с кодом, состояние не меняется."""
         kind = act[0]
         if kind == "kill":
-            _, fname, name = act
+            _, fname, name, *rest = act
+            if rest and not self.p.reputation_enabled:
+                raise ValueError("параметры убийства (маска, свидетели) требуют reputation_enabled (spec 02)")
             if not self.kill_named(self.factions[fname], name, "LEADER_PLAYER", 7):
                 self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
+            elif self.p.reputation_enabled:
+                self._rep_kill(fname, name, rest[0] if rest else {})
             return
+        if kind == "silence":
+            if not self.p.reputation_enabled:
+                raise ValueError("действие silence требует reputation_enabled (spec 02)")
+            return self._silence(*act[1:])
         p = self.p
         if kind == "threaten":
             if not p.npc_state_enabled:
@@ -1384,6 +1448,9 @@ class World:
         if self.player_funds < amount:
             return self._fail("bribe", "NO_FUNDS", faction=a)
         price = p.bribe_price_h * p.bribe_profile_mult.get(self._leader_profile(f), 1.0)
+        if p.reputation_enabled:
+            rr = self.region_rep.get(f.home, p.region_rep_default)
+            price *= 1 + p.bribe_rep_price_k * max(0.0, 50 - rr) / 100
         ln = None
         if p.npc_state_enabled:
             self._npc_init()
@@ -1456,7 +1523,7 @@ class World:
             return False
         n["alive"] = False
         self.rec(phase, "05", f"{f.name}.named.{name}", 1, 0, reason)
-        if self.p.player_levers_enabled and reason == "LEADER_PLAYER":
+        if self.p.player_levers_enabled and reason == "LEADER_PLAYER" and not self.p.reputation_enabled:
             old = self.player_rep.get(f.name, self.p.rep_default)
             new_rep = max(0.0, old - self.p.rep_kill_loss)
             self.player_rep[f.name] = new_rep
