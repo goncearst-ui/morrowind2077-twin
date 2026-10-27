@@ -213,5 +213,21 @@ class Params:
     leader_kill_any_war_end: bool = False          # только для обратной проверки R53: убивать при любом конце войны
     leader_kill_any_site: bool = False             # только для обратной проверки R54: убивать при штурме любого объекта, не только склада
 
+    # --- 21d: рычаги игрока (docs 08, 01; spec 21d) ---
+    player_levers_enabled: bool = False            # False = журнал как до 21d; действия bribe/tip/persuade дают ошибку [предл]
+    bribe_price_h: float = 100.0                   # цена +1 к H в единицах запаса, до множителя профиля [предл]
+    bribe_profile_mult: dict = field(default_factory=lambda: {"Основатель": 1.0, "Радикальный": 0.5, "Осторожный": 2.0})   # [предл]
+    incite_cap: float = 6.0                        # потолок добавки пары (A→B) [предл; док 08: разжигание +5]
+    incite_decay: float = 1.0                      # затухание добавки [док 08: −1 / 10 суток]
+    incite_decay_every: int = 10
+    bribe_cooldown: int = 10                       # тиков между подкупами одного вожака [предл]
+    bribe_gives_knowledge: bool = False            # только для обратной проверки R62: подкуп сам даёт знание
+    persuade_min_shock: float = 25.0               # шок клана для труа [док 08: «высокий шок у них»; число предл]
+    persuade_min_rep: float = 40.0                 # репутация игрока для труа [док 08: «достаточная»; число предл]
+    persuade_cooldown: int = 10                    # [док 08: cooldown; число предл]
+    persuade_block_archnemesis: bool = True        # H ≥ rel_level_cuts[3]: труа недоступна [док 08]
+    rep_default: float = 50.0                      # репутация игрока по умолчанию (заглушка, 02) [предл]
+    rep_kill_loss: float = 30.0                    # убийство именного игроком [предл]
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

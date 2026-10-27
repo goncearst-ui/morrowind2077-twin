@@ -95,6 +95,7 @@ class Relation:
     g_target: float = 0.0                          # цель затухающей части
     g: float = 0.0                                 # текущая затухающая часть
     b: float = 0.0                                 # «предательство», не затухает
+    i: float = 0.0                                 # добавка игрока (подкуп, spec 21d), затухает
     taken: list = field(default_factory=list)      # объекты, которые обидчик взял штурмом у пострадавшего
     h: float = 0.0                                 # последний записанный H
     level: str = ""                                # последний записанный уровень
@@ -130,6 +131,10 @@ class World:
     rule_hits: dict = field(default_factory=dict)        # правило -> сколько раз оно сработало первым у живой фракции (spec 21a)
     player_script: dict = field(default_factory=dict)    # tick -> [(действие, фракция, имя)]; вход сценария вместо игрока (spec 21b)
     succ_queue: list = field(default_factory=list)       # фракции, у которых вожак погиб и преемственность ещё не применена (spec 21b)
+    player_funds: float = 0.0                            # деньги игрока в единицах запаса (spec 21d)
+    player_rep: dict = field(default_factory=dict)       # фракция -> репутация игрока; нет записи = rep_default (spec 21d, заглушка 02)
+    bribe_last: dict = field(default_factory=dict)       # фракция -> тик последнего подкупа
+    persuade_last: dict = field(default_factory=dict)    # фракция -> тик последнего успешного убеждения
 
     @property
     def prosperity(self) -> float:
@@ -909,7 +914,7 @@ class World:
     def rel_h(self, a: str, b: str) -> float:
         """H(A→B) = база + g + b; для пары без записи обиды нет."""
         r = self.rel.get((a, b))
-        return self.base_h(a, b) + (r.g + r.b if r else 0.0)
+        return self.base_h(a, b) + (r.g + r.b + r.i if r else 0.0)
 
     def _register(self, victim: str, offender: str) -> Relation:
         """Пара регистрируется при первом событии между фракциями [док 08]."""
@@ -965,9 +970,15 @@ class World:
                     old = r.g_target
                     r.g_target = max(0.0, r.g_target - p.grudge_decay_step)
                     self.rec(8, "08", f"rel.{victim}>{offender}.g_target", old, r.g_target, "GRUDGE")
+        if p.player_levers_enabled and self.tick % p.incite_decay_every == 0:
+            for (victim, offender), r in self.rel.items():
+                if r.i > 0:
+                    old = r.i
+                    r.i = max(0.0, r.i - p.incite_decay)
+                    self.rec(8, "08", f"rel.{victim}>{offender}.i", old, r.i, "INCITE_DECAY")
         self.rel_cursor = len(self.events)
         for (victim, offender), r in self.rel.items():
-            h = self.base_h(victim, offender) + r.g + r.b
+            h = self.base_h(victim, offender) + r.g + r.b + r.i
             lvl = self.level_of(h)
             self.rec(8, "08", f"rel.{victim}>{offender}.H", r.h, h, "REL")
             self.rec(8, "08", f"rel.{victim}>{offender}.level", r.level, lvl, "REL")
@@ -1158,12 +1169,97 @@ class World:
         return f.leader
 
     def player_action(self, act):
-        """Действие игрока из сценария (двойнику игрок нужен как вход). kill: убить именного. Нет цели или уже мёртв — пропуск в событиях."""
-        kind, fname, name = act
-        f = self.factions[fname]
+        """Действие игрока из сценария (двойнику игрок нужен как вход).
+        kill (фракция, имя); bribe (A, B, сумма); tip (A, объект); persuade (T, O). Отказ — событие player_failed с кодом, состояние не меняется."""
+        kind = act[0]
         if kind == "kill":
-            if not self.kill_named(f, name, "LEADER_PLAYER", 7):
+            _, fname, name = act
+            if not self.kill_named(self.factions[fname], name, "LEADER_PLAYER", 7):
                 self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
+            return
+        p = self.p
+        if not p.player_levers_enabled:
+            raise ValueError("действия bribe/tip/persuade требуют player_levers_enabled (spec 21d)")
+        if not p.leader_enabled:
+            raise ValueError("player_levers_enabled требует leader_enabled")
+        if kind == "bribe":
+            self._bribe(*act[1:])
+        elif kind == "tip":
+            self._tip(*act[1:])
+        elif kind == "persuade":
+            self._persuade(*act[1:])
+        else:
+            raise ValueError(f"неизвестное действие игрока: {kind}")
+
+    def _fail(self, action: str, code: str, **kw):
+        self.events.append(dict(kind="player_failed", tick=self.tick, action=action, code=code, **kw))
+
+    def _leader_profile(self, f: Faction):
+        return next((n["profile"] for n in f.named if n["name"] == f.leader), None)
+
+    def _bribe(self, a: str, b: str, amount: float):
+        p = self.p
+        if not p.relations_enabled:
+            raise ValueError("bribe требует relations_enabled")
+        f = self.factions[a]
+        if f.leader is None:
+            return self._fail("bribe", "NO_LEADER", faction=a)
+        last = self.bribe_last.get(a)
+        if last is not None and self.tick - last < p.bribe_cooldown:
+            return self._fail("bribe", "COOLDOWN", faction=a)
+        if self.player_funds < amount:
+            return self._fail("bribe", "NO_FUNDS", faction=a)
+        price = p.bribe_price_h * p.bribe_profile_mult.get(self._leader_profile(f), 1.0)
+        r = self._register(a, b)
+        dh = min(amount / price, p.incite_cap - r.i)
+        if dh <= 1e-9:
+            return self._fail("bribe", "CAP", faction=a)
+        cost = dh * price
+        self.rec(7, "pl", "player.funds", self.player_funds, self.player_funds - cost, "PLAYER_BRIBE")
+        self.player_funds -= cost
+        old = r.i
+        r.i += dh
+        self.rec(7, "08", f"rel.{a}>{b}.i", old, r.i, "PLAYER_BRIBE")
+        self.bribe_last[a] = self.tick
+        self.events.append(dict(kind="player_bribe", tick=self.tick, faction=a, target=b, dh=dh, cost=cost))
+        if p.bribe_gives_knowledge:
+            for s in self.sites:
+                if s.owner == b:
+                    self._know_set(a, s.name, b, "PLAYER_TIP")
+
+    def _tip(self, a: str, site: str):
+        if not self.p.knowledge_enabled:
+            raise ValueError("tip требует knowledge_enabled")
+        f = self.factions[a]
+        if f.leader is None:
+            return self._fail("tip", "NO_LEADER", faction=a)
+        s = next((x for x in self.sites if x.name == site), None)
+        if s is None or s.owner is None or s.owner == a:
+            return self._fail("tip", "UNKNOWN", faction=a, site=site)
+        self._know_set(a, site, s.owner, "PLAYER_TIP")
+
+    def _persuade(self, t: str, o: str):
+        p = self.p
+        if not p.wars_enabled:
+            raise ValueError("persuade требует wars_enabled")
+        f = self.factions[t]
+        last = self.persuade_last.get(t)
+        if last is not None and self.tick - last < p.persuade_cooldown:
+            return self._fail("persuade", "COOLDOWN", faction=t)
+        key = (t, o) if (t, o) in self.wars else (o, t) if (o, t) in self.wars else None
+        if key is None:
+            return self._fail("persuade", "NO_WAR", faction=t)
+        if f.leader is None:
+            return self._fail("persuade", "NO_LEADER", faction=t)
+        if f.shock < p.persuade_min_shock:
+            return self._fail("persuade", "NO_SHOCK", faction=t)
+        if self.player_rep.get(t, p.rep_default) < p.persuade_min_rep:
+            return self._fail("persuade", "LOW_REP", faction=t)
+        if p.persuade_block_archnemesis and self.rel_h(t, o) >= p.rel_level_cuts[3]:
+            return self._fail("persuade", "ARCHNEMESIS", faction=t)
+        self._war_end(key, "WAR_END_PLAYER")
+        self.persuade_last[t] = self.tick
+        self.events.append(dict(kind="player_truce", tick=self.tick, faction=t, other=o))
 
     def kill_named(self, f: Faction, name, reason: str, phase: int) -> bool:
         """Убить именного. Вожак: событие leader_killed (читает фаза 4 следующего тика). Офицер: ярус офицеров -1. Возвращает False, если цели нет или она мертва."""
@@ -1172,6 +1268,11 @@ class World:
             return False
         n["alive"] = False
         self.rec(phase, "05", f"{f.name}.named.{name}", 1, 0, reason)
+        if self.p.player_levers_enabled and reason == "LEADER_PLAYER":
+            old = self.player_rep.get(f.name, self.p.rep_default)
+            new_rep = max(0.0, old - self.p.rep_kill_loss)
+            self.player_rep[f.name] = new_rep
+            self.rec(phase, "pl", f"player.rep.{f.name}", old, new_rep, "PLAYER_KILL")
         if n["role"] == "вожак":
             self.rec(phase, "05", f"{f.name}.leader", name, None, reason)
             f.leader = None

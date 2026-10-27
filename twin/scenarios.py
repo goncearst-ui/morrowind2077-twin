@@ -59,6 +59,9 @@ EV_MECH = ("EV14", "EV15", "EV16", "EV17", "EV19")
 EV_OLD = EV_PIN + EV_WORLD + EV_MECH                                      # сценарии 21a: журналы при leader_enabled = False совпадают с tests/baseline_pre21b.json
 EV_LEADER = ("EV20", "EV21", "EV22", "EV23", "EV24", "EV25", "EV26", "EV26b", "EV26c", "EV27", "EV30", "EV31")   # spec 21b
 EV_SCENARIOS = EV_OLD + EV_LEADER
+PL_SIMPLE = ("PL1", "PL2", "PL3", "PL4", "PL5", "PL6", "PL7")      # spec 21d: чистый мир без войн, подкуп и подсказка
+PL_WAR = ("PL8", "PL8b", "PL8c", "PL9", "PL10", "PL11")              # spec 21d: обстановка WR
+PL_SCENARIOS = PL_SIMPLE + PL_WAR
 
 
 def roster(fname, successors=(), officers=0, leader=True):
@@ -73,9 +76,10 @@ def roster(fname, successors=(), officers=0, leader=True):
     return out
 
 
-def give_named(w, fname, successors=(), officers=0):
+def give_named(w, fname, successors=(), officers=0, profile="Основатель"):
     f = w.factions[fname]
     f.named = roster(fname, successors, officers)
+    f.named[0]["profile"] = profile
     f.leader = f"{fname}:вожак"
 
 
@@ -441,6 +445,62 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World(fs, ss, p)
         w.known_at_start = {n: tuple(x.name for x in ss if x.owner != n) for n, (a_, m_) in kinds.items() if a_ in ("Хищники", "Контролёры")}
         horizon = 500
+    elif sc in PL_SCENARIOS:
+        # spec 21d: рычаги игрока. Правила числового стека вынуты (evo_rule_order = ()), оси не меняют уклад
+        p = replace(p, evolution_enabled=True, leader_enabled=True, player_levers_enabled=True, evo_rule_order=())
+        if sc in PL_SIMPLE:
+            p = replace(p, relations_enabled=True, knowledge_enabled=True, hunger_threshold=0.0, underpay_morale=0.0, raids_enabled=False,
+                        object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False,
+                        decisions_enabled=False, archetype_assault_threshold={})
+            names = ("A", "B", "C", "D") if sc == "PL3" else ("A", "B")
+            fs = {n: faction(p, n, "Хранители", 30, 40, 40 if n == "B" else 0) for n in names}
+            w = World(fs, [Site("Перевал", 40, 90, 4, owner="B")], p)
+            for n in names:
+                give_named(w, n, profile={"C": "Радикальный", "D": "Осторожный"}.get(n, "Основатель"))
+            horizon = 70 if sc == "PL7" else 25
+            w.player_funds = {"PL1": 1000.0, "PL2": 3000.0, "PL3": 1000.0, "PL4": 1000.0, "PL5": 100.0, "PL6": 2000.0, "PL7": 1000.0}[sc]
+            w.player_script = {
+                "PL1": {2: [("bribe", "A", "B", 300.0)]},
+                "PL2": {2: [("bribe", "A", "B", 300.0)], 12: [("bribe", "A", "B", 2000.0)]},
+                "PL3": {2: [("bribe", n, "B", 300.0) for n in "ACD"]},
+                "PL4": {3: [("kill", "A", "A:вожак")], 5: [("bribe", "A", "B", 300.0), ("tip", "A", "Перевал")]},
+                "PL5": {2: [("bribe", "A", "B", 300.0)]},
+                "PL6": {2: [("bribe", "A", "B", 200.0)], 7: [("bribe", "A", "B", 200.0)], 12: [("bribe", "A", "B", 200.0)]},
+                "PL7": {2: [("bribe", "A", "B", 600.0)]},
+            }[sc]
+        else:
+            base = {"PL8": "WR2", "PL8b": "WR2", "PL8c": "WR2"}.get(sc, "WR1")
+            w, horizon = build(base, p)
+            for n in w.factions:
+                give_named(w, n, officers=1 if (sc == "PL11" and n == "B") else 0)
+            w.player_funds = 1000.0
+            if sc in ("PL8", "PL8b", "PL8c"):
+                if sc == "PL8b":
+                    w.known_at_start = {}
+                w.player_script = {2: [("tip", "A", "Перевал"), ("bribe", "A", "B", 600.0)] if sc == "PL8" else
+                                      [("bribe", "A", "B", 600.0)] if sc == "PL8b" else [("tip", "A", "Перевал")]}
+                horizon = 40
+            else:
+                horizon = 40
+                shock = lambda w: setattr(w.factions["B"], "shock", 45.0)
+                if sc == "PL9":
+                    w.scheduled = {22: [shock]}
+                    w.player_script = {22: [("persuade", "B", "A")], 24: [("persuade", "B", "A")]}
+                elif sc == "PL10":
+                    w.factions["C"] = faction(p, "C", "Хранители", 30, 40, 0)   # третья сторона для NO_WAR
+                    w.init_tiers(w.factions["C"])
+                    w.publish_dos(w.factions["C"], phase=0)
+                    w.regions.setdefault(w.factions["C"].home, p.region_start)
+                    give_named(w, "C")
+                    w.scheduled = {20: [lambda w: w.player_rep.__setitem__("B", 10.0)], 21: [shock],
+                                   22: [lambda w: w.player_rep.__setitem__("B", 50.0), lambda w: w.betray("A", "B"), shock],
+                                   24: [shock], 25: [shock]}
+                    w.player_script = {20: [("persuade", "B", "A")], 21: [("persuade", "B", "A")], 22: [("persuade", "B", "A")],
+                                       23: [("kill", "B", "B:вожак")], 24: [("persuade", "B", "A")], 25: [("persuade", "B", "C")]}
+                else:   # PL11
+                    w.scheduled = {21: [shock]}
+                    w.player_script = {20: [("kill", "B", "B:офицер1")], 21: [("persuade", "B", "A")]}
+        return w, horizon
     elif sc in ("EV26", "EV26b", "EV26c"):
         # spec 21b: обстановка войны WR7a (сломлены), WR7b (выдохлись), WR7c (цель достигнута); у A и B вожак и преемник
         base = {"EV26": "WR7a", "EV26b": "WR7b", "EV26c": "WR7c"}[sc]
@@ -1186,6 +1246,56 @@ def check(sc: str, w: World, series):
                 sk[e["reason"]] = sk.get(e["reason"], 0) + 1
         res.append(("на тике 500 у каждой из 6 фракций людей больше нуля", all(v > 0 for v in alive.values()),
                     f"людей: {alive}; налётов на объекты {len(obj)}, штурмов {len([e for e in w.events if e['kind'] == 'assault'])}, войн {len([e for e in w.events if e['kind'] == 'war_declared'])}, пропусков {sk}"))
+    elif sc in PL_SCENARIOS:
+        pf = [(e["tick"], e["action"], e["code"]) for e in w.events if e["kind"] == "player_failed"]
+        wd = [(e["tick"], e["initiator"], e["victim"]) for e in w.events if e["kind"] == "war_declared"]
+        we = [(e["tick"], e["reason"]) for e in w.events if e["kind"] == "war_end"]
+        def rows(target, reason=None):
+            return [r for r in w.log if r[3] == target and (reason is None or r[6] == reason)]
+        def ok_(name, cond, det):
+            res.append((name, bool(cond), det))
+        if sc == "PL1":
+            br = rows("rel.A>B.i", "PLAYER_BRIBE")
+            ok_("i(A→B) = 3.0 строкой PLAYER_BRIBE", [(r[0], r[5]) for r in br] == [(2, 3.0)], f"строки: {br}")
+            hr = rows("rel.A>B.H")
+            ok_("H(A→B) на тике подкупа = база + 3.0", bool(hr) and hr[0][0] == 2 and hr[0][5] == w.base_h("A", "B") + 3.0, f"H: {[(r[0], r[5]) for r in hr]}, база {w.base_h('A', 'B')}")
+            ok_("деньги 1000 → 700 (PLAYER_BRIBE)", [(r[0], r[4], r[5]) for r in rows("player.funds", "PLAYER_BRIBE")] == [(2, 1000.0, 700.0)], f"деньги: {rows('player.funds')}")
+        elif sc == "PL2":
+            br = rows("rel.A>B.i", "PLAYER_BRIBE")
+            ok_("после второго подкупа i = 6.0 (потолок)", [r[5] for r in br] == [3.0, 6.0], f"строки: {br}")
+            ok_("за второй подкуп списано только за прирост до потолка (400), остальное у игрока", [(r[0], r[4] - r[5]) for r in rows("player.funds", "PLAYER_BRIBE")] == [(2, 300.0), (12, 400.0)] and w.player_funds == 2300.0,
+                f"деньги: {rows('player.funds')}, итого {w.player_funds}")
+        elif sc == "PL3":
+            iv = {n: [r[5] for r in rows(f"rel.{n}>B.i", "PLAYER_BRIBE")] for n in "ACD"}
+            ok_("на 300: Основатель +3.0, Радикальный +6.0, Осторожный +1.5", iv == {"A": [3.0], "C": [6.0], "D": [1.5]}, f"добавки: {iv}")
+        elif sc == "PL4":
+            ok_("подкуп и подсказка отказаны NO_LEADER, деньги целы", pf == [(5, "bribe", "NO_LEADER"), (5, "tip", "NO_LEADER")] and w.player_funds == 1000.0, f"отказы: {pf}, деньги {w.player_funds}")
+        elif sc == "PL5":
+            ok_("NO_FUNDS, ничего не изменилось", pf == [(2, "bribe", "NO_FUNDS")] and w.player_funds == 100.0 and not w.rel, f"отказы: {pf}")
+        elif sc == "PL6":
+            br = rows("rel.A>B.i", "PLAYER_BRIBE")
+            ok_("на тике 7 COOLDOWN, на тике 12 подкуп проходит", pf == [(7, "bribe", "COOLDOWN")] and [r[0] for r in br] == [2, 12], f"отказы: {pf}, подкупы: {[r[0] for r in br]}")
+        elif sc == "PL7":
+            dec = rows("rel.A>B.i", "INCITE_DECAY")
+            ok_("i = 6.0 затухает до 0 за 60 тиков по 1.0 каждые 10", [(r[0], r[5]) for r in dec] == [(10, 5.0), (20, 4.0), (30, 3.0), (40, 2.0), (50, 1.0), (60, 0.0)] and w.rel[("A", "B")].i == 0.0, f"затухание: {[(r[0], r[5]) for r in dec]}")
+        elif sc == "PL8":
+            ok_("после подсказки и подкупа война A>B объявлена", any(x[1:] == ("A", "B") for x in wd), f"войны: {wd}")
+        elif sc == "PL8b":
+            ok_("подкуп без подсказки и без знания: войны нет", not wd, f"войны: {wd}")
+        elif sc == "PL8c":
+            ok_("подсказка без подкупа: войны нет", not wd, f"войны: {wd}")
+        elif sc == "PL9":
+            ok_("убеждение на тике 22: война закрыта WAR_END_PLAYER, победителя и репараций нет", we and we[0] == (22, "WAR_END_PLAYER") and not [e for e in w.events if e["kind"] == "war_end" and (e["winner"] or e["reparations"])], f"концы: {we}")
+            tr = [r for r in w.log if r[3].startswith("truce.") and r[6] == "TRUCE"]
+            ok_("перемирие war_truce стартовало на тике 22", any(r[0] == 22 and r[5] == 22 + w.p.war_truce for r in tr), f"перемирия: {tr}")
+            ok_("новой войны пары до конца перемирия нет; повтор на тике 24 — COOLDOWN", not [x for x in wd if 22 < x[0] < 22 + w.p.war_truce] and pf == [(24, "persuade", "COOLDOWN")], f"войны: {wd}; отказы: {pf}")
+        elif sc == "PL10":
+            ok_("отказы по порядку: NO_SHOCK, LOW_REP, ARCHNEMESIS, NO_LEADER, NO_WAR", [x[2] for x in pf] == ["NO_SHOCK", "LOW_REP", "ARCHNEMESIS", "NO_LEADER", "NO_WAR"], f"отказы: {pf}")
+            ok_("во всех случаях война идёт (до тика 26 не закрыта)", not [x for x in we if x[0] <= 26] and wd, f"войны: {wd}, концы: {we}")
+        elif sc == "PL11":
+            rp = rows("player.rep.B", "PLAYER_KILL")
+            ok_("убийство офицера: репутация B 50 → 20", [(r[4], r[5]) for r in rp] == [(50.0, 20.0)], f"репутация: {rp}")
+            ok_("persuade(B, A) → LOW_REP, хотя шок и война есть; война идёт", pf == [(21, "persuade", "LOW_REP")] and not [x for x in we if x[0] <= 21], f"отказы: {pf}, концы: {we}")
     elif sc in EV_LEADER:
         ch = [(e["tick"], e["faction"], e["frm"], e["to"], e["rule"]) for e in w.events if e["kind"] == "archetype_change"]
         lk = [(e["tick"], e["faction"], e["reason"]) for e in w.events if e["kind"] == "leader_killed"]
@@ -1434,6 +1544,14 @@ REVERSE = {
     "R48": (replace(Params(), evo_rule5_needs_force=False), ("EV18",), "вход в Хищники не требует сил для налёта"),
     "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
+    "R55": (replace(Params(), incite_cap=1e9), ("PL2",), "потолок добавки снят"),
+    "R56": (replace(Params(), bribe_cooldown=0), ("PL6",), "остывания подкупа нет"),
+    "R57": (replace(Params(), persuade_min_shock=0.0), ("PL10",), "порог шока для убеждения 0"),
+    "R58": (replace(Params(), persuade_min_rep=0.0), ("PL11",), "порог репутации для убеждения 0"),
+    "R59": (replace(Params(), incite_decay_every=10**9), ("PL7",), "добавка не затухает"),
+    "R60": (replace(Params(), bribe_profile_mult={}), ("PL3",), "профиль вожака не влияет на цену"),
+    "R61": (replace(Params(), persuade_block_archnemesis=False), ("PL10",), "труа доступна при Archnemesis"),
+    "R62": (replace(Params(), bribe_gives_knowledge=True), ("PL8b",), "подкуп сам даёт знание (подсказка не нужна)"),
     "R50": (replace(Params(), succession_ignores_cooldown=False), ("EV21",), "ApplySuccession не пробивает паузу"),
     "R51": (replace(Params(), succession_resets_pending=False), ("EV21",), "ApplySuccession не сбрасывает pending"),
     "R52": (replace(Params(), leader_wipe_kills_successors=False), ("EV25",), "при зачистке базы преемник жив"),
