@@ -79,6 +79,8 @@ class Faction:
     obj_rival_start: int = 0        # Manpower соперника при установке цели
     obj_rival_depot: str | None = None   # депо соперника при установке цели (для OBJ_TARGET_LEFT)
     obj_start: dict = field(default_factory=dict)    # свои числа при установке: mp, ctl
+    vendetta: int = 0               # осталось суток вендетты (spec 16c)
+    vendetta_culprit: str | None = None   # виновник: фракция или "player"
     strategy_txt: str = "1/0/1"      # последний записанный вектор стратегии (spec 16b), нейтральный по умолчанию
     obj_met: list = field(default_factory=list)      # производный кэш: какие KR выполнены на прошлом шаге (нужен для причины KR_<n>)
     ax_r: float = 0.0               # ось R (21a), публикуемая производная
@@ -836,6 +838,10 @@ class World:
             fn(self)
         fs = list(self.factions.values())
         # фаза 1 — затухание шока, восстановление региона
+        if self.p.inheritance_enabled:
+            if not (self.p.obj_enabled and self.p.strategy_enabled):
+                raise ValueError("inheritance_enabled требует obj_enabled и strategy_enabled (spec 16c)")
+            self._vendetta_tick()
         if self.p.reputation_enabled and not self.p.player_levers_enabled:
             raise ValueError("reputation_enabled требует player_levers_enabled (spec 02)")
         if self.p.envoys_enabled:
@@ -1280,7 +1286,7 @@ class World:
             s.owner = a.name
             self.rec(7, "13", f"site.{s.name}.owner", d.name, a.name, "ASSAULT")
             if self.p.leader_enabled and (self.p.leader_kill_seat or self.p.leader_kill_any_site) and (seat or self.p.leader_kill_any_site):
-                self.kill_named(d, self.leader_name(d), "LEADER_SEAT", 7)
+                self.kill_named(d, self.leader_name(d), "LEADER_SEAT", 7, culprit=a.name)
         self.events.append(dict(
             tick=self.tick, kind="assault", forced=forced, attacker=a.name, defender=d.name,
             site=s.name, attacker_wins=attacker_wins, ratio=ratio,
@@ -1486,7 +1492,7 @@ class World:
         self.events.append(dict(kind="war_end", tick=self.tick, initiator=a, victim=b, reason=reason, goal=self.wars[key]["goal"],
                                 winner=winner, loser=loser, reparations=amount))
         if self.p.leader_enabled and loser and ((reason == "WAR_END_BROKEN" and self.p.leader_kill_broken) or self.p.leader_kill_any_war_end):
-            self.kill_named(self.factions[loser], self.leader_name(self.factions[loser]), "LEADER_BROKEN", 8)
+            self.kill_named(self.factions[loser], self.leader_name(self.factions[loser]), "LEADER_BROKEN", 8, culprit=winner)
         del self.wars[key]
         pair = tuple(sorted(key))
         until = self.tick + self.p.war_truce
@@ -1551,6 +1557,8 @@ class World:
                     add = min(p.war_chance_cap, p.war_chance_base + p.war_chance_slope * (h - p.rel_level_cuts[2]))
                     if p.strategy_enabled and not p.strategy_bug_no_acc:   # spec 16b: прибавка × war_acc_mult зачинщика
                         add *= self._strategy(fa)[2]
+                    if p.inheritance_enabled and fa.vendetta > 0 and fa.vendetta_culprit == b:   # spec 16c п. 5а
+                        add *= p.vendetta_w
                     self.war_acc[(a, b)] = acc + add
                     self.rec(8, "08b", f"war.{a}>{b}.acc", acc, acc + add, "WAR_ACC")
                     acc += add
@@ -1587,7 +1595,9 @@ class World:
                 else:
                     self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
                 return
-            if not self.kill_named(self.factions[fname], name, "LEADER_PLAYER", 7):
+            opts = rest[0] if rest else {}
+            known = opts.get("witnesses", 1) >= 1 and ((not opts.get("masked", False)) or self.p.rep_masked_identifies)   # spec 16c п. 1: опознание по 02
+            if not self.kill_named(self.factions[fname], name, "LEADER_PLAYER", 7, culprit="player" if known else None):
                 self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
             elif self.p.reputation_enabled:
                 self._rep_kill(fname, name, rest[0] if rest else {})
@@ -1701,11 +1711,13 @@ class World:
             return self._fail("persuade", "LOW_REP", faction=t)
         if p.persuade_block_archnemesis and self.rel_h(t, o) >= p.rel_level_cuts[3]:
             return self._fail("persuade", "ARCHNEMESIS", faction=t)
+        if p.inheritance_enabled and f.vendetta > 0 and f.vendetta_culprit == "player" and not p.inh_bug_persuade_ignores:
+            return self._fail("persuade", "VENDETTA", faction=t)   # spec 16c п. 5б: после ARCHNEMESIS
         self._war_end(key, "WAR_END_PLAYER")
         self.persuade_last[t] = self.tick
         self.events.append(dict(kind="player_truce", tick=self.tick, faction=t, other=o))
 
-    def kill_named(self, f: Faction, name, reason: str, phase: int) -> bool:
+    def kill_named(self, f: Faction, name, reason: str, phase: int, culprit=None) -> bool:
         """Убить именного. Вожак: событие leader_killed (читает фаза 4 следующего тика). Офицер: ярус офицеров -1. Возвращает False, если цели нет или она мертва."""
         n = next((x for x in f.named if x["name"] == name), None) if name else None
         if n is None or not n["alive"]:
@@ -1720,7 +1732,7 @@ class World:
         if n["role"] == "вожак":
             self.rec(phase, "05", f"{f.name}.leader", name, None, reason)
             f.leader = None
-            self.events.append(dict(kind="leader_killed", tick=self.tick, faction=f.name, name=name, reason=reason))
+            self.events.append(dict(kind="leader_killed", tick=self.tick, faction=f.name, name=name, reason=reason, culprit=culprit))
         elif n["role"] == "офицер":
             self.kill_tier(f, 1, "off", phase, "KILL_NAMED")
             self.events.append(dict(kind="officer_killed", tick=self.tick, faction=f.name, name=name, reason=reason))
@@ -1761,6 +1773,57 @@ class World:
         f.obj_rival_depot = r.depot if r else None
         f.obj_start = dict(mp=f.manpower, ctl=f.ctl if f.ctl is not None else p.evo_c_rest[f.archetype])
         self._obj_reset(f, obj, "OBJ_SET", 7)
+
+    def _vendetta_tick(self):
+        """Начало тика: вендетта убывает на 1 до нуля (spec 16c п. 4). Выставленная на тике T держит 20 на тике T и 0 на T + 20."""
+        for f in self.factions.values():
+            if f.vendetta > 0:
+                if self.p.inh_bug_vendetta_extend and f.vendetta == 10:
+                    self.rec(1, "16", f"{f.name}.vendetta", 10, self.p.vendetta_max, "VENDETTA_SET")   # R127: продление
+                    f.vendetta = self.p.vendetta_max
+                    continue
+                self.rec(1, "16", f"{f.name}.vendetta", f.vendetta, f.vendetta - 1, "VENDETTA_TICK")
+                f.vendetta -= 1
+                if f.vendetta == 0:
+                    f.vendetta_culprit = None
+
+    def _inherit(self, f: Faction, succ: dict):
+        """Spec 16c: исход цели по (профиль преемника, причина смерти вожака); потолок активных целей важнее; вендетта."""
+        from . import objective as O
+        p = self.p
+        ev = next((e for e in reversed(self.events) if e["kind"] == "leader_killed" and e["faction"] == f.name), None)
+        culprit = ev.get("culprit") if ev else None
+        known = culprit is not None or p.inh_bug_ignore_cause
+        prof = succ["profile"]
+        if p.inh_bug_swap_profiles and prof == "Идеолог":
+            prof = "Радикальный"
+        rule = p.inheritance_table.get(prof, p.inheritance_table["Основатель"])["known" if known else "unknown"]
+        pred = f.objective
+        keep = False
+        if rule[0] == "change":
+            new = rule[1]
+        elif rule[0] == "continue_active_else":
+            keep, new = (True, pred) if O.is_active(f, pred) else (False, rule[1])
+        else:   # continue_ideal_else
+            keep, new = (True, pred) if pred in (2, 5) else (False, rule[1])
+        reason = "OBJ_CONTINUE" if keep else "OBJ_CHANGE"
+        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        if O.is_active(f, new) and others + 1 > p.obj_max_active and not p.inh_bug_no_cap:
+            keep, new, reason = False, 0, "CAP_ACTIVE_OBJ"
+        if keep:
+            for k in sorted(f.obj_ctr):
+                self.rec(6, "16", f"{f.name}.obj_ctr.{k}", f.obj_ctr[k], 0, reason)
+            f.obj_ctr = {}
+            krs = p.obj_kr.get(pred, ())
+            met = [(not O.duration_kr(kr)) and O.cond(self, f, kr) for kr in krs]
+            self.rec(6, "16", f"{f.name}.obj_stage", f.obj_stage, sum(met), reason)
+            f.obj_stage, f.obj_met, f.obj_stage_tick = sum(met), met, self.tick
+            self.events.append(dict(kind="objective_continued", tick=self.tick, faction=f.name, objective=pred))
+        else:
+            self._obj_reset(f, new, reason, 6)
+        if known and prof in p.vendetta_profiles and p.vendetta_trait in succ.get("traits", ()):
+            self.rec(6, "16", f"{f.name}.vendetta", f.vendetta, p.vendetta_max, "VENDETTA_SET")
+            f.vendetta, f.vendetta_culprit = p.vendetta_max, culprit or "player"
 
     def _strategy(self, f: Faction):
         """Spec 16b: вектор (thr_mult, thr_min, war_acc_mult) = строка таблицы (цель × трейты вожака); не хранится, считается по текущим данным."""
@@ -1849,7 +1912,7 @@ class World:
             f.leader = succ["name"]
             self.rec(6, "05", f"{f.name}.leader", None, succ["name"], "RULE_2")
             cand, rule = p.succession_arch[succ["profile"]], 2
-        if p.obj_enabled and f.objective != 0:   # spec 16a п. 5б: цель вожака не переходит к преемнику (до 16c)
+        if p.obj_enabled and f.objective != 0 and (succ is None or not p.inheritance_enabled):   # spec 16a п. 5б: цель вожака не переходит к преемнику; с 16c — по таблице ниже
             if succ is None:
                 if not p.obj_bug_no_collapse_morale:
                     self.setf(f, "morale", max(0.0, f.morale - p.obj_collapse_morale), 6, "16", "OBJ_COLLAPSE")
@@ -1864,6 +1927,8 @@ class World:
             self._switch(f, cand, rule)   # _switch сам сбрасывает pending
             if not p.succession_resets_pending:
                 self._pending(f, *keep)   # только обратная проверка R51: ожидание не сброшено (видно в журнале)
+        if p.obj_enabled and p.inheritance_enabled and succ is not None:
+            self._inherit(f, succ)   # spec 16c: после смены уклада
         return True
 
     def _evo_axes(self, f: Faction):

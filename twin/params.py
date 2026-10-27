@@ -372,5 +372,23 @@ class Params:
     strategy_bug_ignore_traits: bool = False       # только для R123: таблица игнорирует трейты
     strategy_bug_no_log: bool = False              # только для R124: вектор не пишется в журнал
 
+    # --- 16c наследование цели и вендетта (spec 16c) ---
+    inheritance_enabled: bool = False              # требует obj_enabled и strategy_enabled
+    vendetta_max: int = 20                         # [док 16] срок вендетты, суток
+    vendetta_w: float = 1.5                        # [док 16] множитель накопителя войны против виновника
+    vendetta_profiles: tuple = ("Радикальный",)    # [док 16] профили, дающие вендетту при известном виновнике
+    vendetta_trait: str = "Agreeableness_Low"      # [док 16] трейт преемника для вендетты
+    inheritance_table: dict = field(default_factory=lambda: {   # [док 16] профиль → {известный / неизвестный виновник: правило}
+        "Осторожный": {"known": ("change", 0), "unknown": ("change", 0)},
+        "Основатель": {"known": ("change", 0), "unknown": ("change", 0)},   # [предл] как Осторожный
+        "Радикальный": {"known": ("continue_active_else", 3), "unknown": ("change", 3)},
+        "Идеолог": {"known": ("continue_ideal_else", 2), "unknown": ("continue_ideal_else", 2)},
+    })
+    inh_bug_ignore_cause: bool = False             # только для R125: причина смерти игнорируется (всегда «известен»)
+    inh_bug_no_cap: bool = False                   # только для R126: потолок активных целей не проверяется при наследовании
+    inh_bug_vendetta_extend: bool = False          # только для R127: вендетта продлевается
+    inh_bug_persuade_ignores: bool = False         # только для R128: убеждение не читает вендетту
+    inh_bug_swap_profiles: bool = False            # только для R129: Идеолог ведёт себя как Радикальный
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
