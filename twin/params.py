@@ -390,5 +390,11 @@ class Params:
     inh_bug_persuade_ignores: bool = False         # только для R128: убеждение не читает вендетту
     inh_bug_swap_profiles: bool = False            # только для R129: Идеолог ведёт себя как Радикальный
 
+    # --- 17 триада (spec 17): только тестовые поломки, механики нет ---
+    tri_bug_colony_lever: bool = False             # только для R141: Тропа штурмует Колонию (колония втянута в рычаг)
+    tri_bug_ignore_goal: bool = False              # только для R142: цель Метрополии игнорируется (всегда 0)
+    tri_bug_vassal_h: bool = False                 # только для R143: флаг вассальной труа меняет уровни отношений
+    tri_bug_same_leaders: bool = False             # только для R144: лидеры совпадают по трейтам
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
