@@ -1,7 +1,9 @@
 # Plan 21c: Культисты, Regime, Идеолог, TF_Doctrine
 
 Spec: specs/21c-cultists-regime-doctrine.spec.md (черновик)
-Статус: ждёт утверждения Стана. Код не менять.
+Статус: утверждён 2026-10-27 (Стан: «утверждаю 21c», разрешены правка tests/test_acceptance.py и новый эталон tests/baseline_pre21c.json).
+
+Выполнено: 2026-10-27, см. reports/21c-report.md.
 
 ## Шаги
 1. Эталон: журналы EV1–EV31 и PL1–PL11 до правок кода → tests/baseline_pre21c.json.

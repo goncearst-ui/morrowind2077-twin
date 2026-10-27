@@ -62,6 +62,9 @@ EV_SCENARIOS = EV_OLD + EV_LEADER
 PL_SIMPLE = ("PL1", "PL2", "PL3", "PL4", "PL5", "PL6", "PL7")      # spec 21d: чистый мир без войн, подкуп и подсказка
 PL_WAR = ("PL8", "PL8b", "PL8c", "PL9", "PL10", "PL11")              # spec 21d: обстановка WR
 PL_SCENARIOS = PL_SIMPLE + PL_WAR
+CR_PIN = ("CR1", "CR2", "CR3", "CR4", "CR7", "CR7k", "CR8", "CR9")   # spec 21c: оси задаёт подвязка
+CR_SCENARIOS = CR_PIN + ("CR5",)
+CR_ORDER = (3, 4, 5, 6, 7, 8, 9)
 
 
 def roster(fname, successors=(), officers=0, leader=True):
@@ -509,17 +512,51 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         for n in ("A", "B"):
             give_named(w, n, ("Радикальный",))
         return w, horizon
-    elif sc in EV_LEADER:
+    elif sc in CR_PIN:
+        # spec 21c: чистая обстановка как EV_PIN, порядок правил полный (если сценарий не переопределил), оси задаёт подвязка
+        order = CR_ORDER if p.evo_rule_order == Params().evo_rule_order else p.evo_rule_order
+        p = replace(p, evolution_enabled=True, hunger_threshold=0.0, underpay_morale=0.0, raids_enabled=False, object_raids_enabled=False,
+                    smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False, decisions_enabled=False,
+                    archetype_assault_threshold={}, evo_m_recover=0.0, evo_c_relax=0.0, evo_rule_order=order)
+        site = Site("Объект", 10, 0, 4, owner="A", income_disabled=True)
+        spec = {   # сценарий: (уклад, объект, доктрина, сегменты подвязки (до тика, dos, шок, мораль, C), горизонт)
+            "CR1": ("Хранители", False, 0, [(8, 15, 30, 25, 50)], 8),
+            "CR2": ("Культисты", False, 0, [(20, 3, 26, 25, 30), (26, 3, 26, 50, 30)], 26),
+            "CR3": ("Хранители", False, 0, [(8, 15, 22, 60, 80)], 8),
+            "CR4": ("Regime", False, 0, [(8, 15, 22, 10, 80)], 8),
+            "CR7": ("Хищники", True, 1, [(20, 18, 8, 60, 70), (24, 27, 8, 60, 70)], 24),
+            "CR7k": ("Хищники", True, 0, [(20, 18, 8, 60, 70), (24, 27, 8, 60, 70)], 24),
+            "CR8": ("Хищники", True, 2, [(30, 27, 0, 60, 50)], 30),
+            "CR9": ("Хищники", False, 2, [(200, None, None, 0, None)], 200),
+        }
+        arche, with_site, doc, segs, horizon = spec[sc]
+        if sc == "CR9":
+            p = replace(p, hunger_threshold=10.0)    # голод и дезертирство работают, дохода нет
+        w = World({"A": faction(p, "A", arche, 30, 3 if sc == "CR9" else 20, 10 if with_site else 0)}, [site] if with_site else [], p)
+        w.factions["A"].doctrine = doc
+        if sc == "CR8":
+            p2 = replace(p, leader_enabled=True)
+            w.p = p2
+            give_named(w, "A", ("Осторожный",))
+            w.player_script = {10: [("kill", "A", "A:вожак")]}
+        if sc == "CR9":
+            w.factions["A"].morale = 0.0        # M = 0 один раз; подвязки нет, иначе она обнуляла бы долг голода
+        else:
+            w.scheduled = {t: [ev_pins("A", segs)] for t in range(1, horizon + 1)}
+        for f in w.factions.values():
+            w.publish_dos(f, phase=0)
+        return w, horizon
+    elif sc in EV_LEADER or sc == "CR5":
         # spec 21b: чистая обстановка, правила 6 и 7 вынуты из стека (оси не вмешиваются), голод и каналы выключены, оси растут и тают как обычно
         p = replace(p, evolution_enabled=True, leader_enabled=True, hunger_threshold=0.0, underpay_morale=0.0, raids_enabled=False,
                     object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False,
                     decisions_enabled=False, archetype_assault_threshold={}, evo_rule_order=(3, 5, 8))
         horizon = 20
         PV, NS = lambda n: Site(f"Перевал{n}", 40, 90, 4, owner=n), lambda n: Site(f"Насосная{n}", 15, 35, 2, owner=n)
-        if sc in ("EV20", "EV21", "EV22", "EV23", "EV31"):
+        if sc in ("EV20", "EV21", "EV22", "EV23", "EV31", "CR5"):
             arche = {"EV22": "Хищники"}.get(sc, "Хранители")
             w = World({"A": faction(p, "A", arche, 30, 40, 10)}, [Site("Объект", 10, 0, 4, owner="A", income_disabled=True)], p)   # объект есть: иначе «зачистка базы» убила бы преемников
-            succ = {"EV21": ("Радикальный",), "EV22": ("Осторожный",), "EV23": ("Радикальный", "Осторожный")}.get(sc, ())
+            succ = {"EV21": ("Радикальный",), "EV22": ("Осторожный",), "EV23": ("Радикальный", "Осторожный"), "CR5": ("Идеолог",)}.get(sc, ())
             give_named(w, "A", succ, officers=2 if sc == "EV31" else 0)
             if sc == "EV21":
                 def prime(w):
@@ -1246,6 +1283,32 @@ def check(sc: str, w: World, series):
                 sk[e["reason"]] = sk.get(e["reason"], 0) + 1
         res.append(("на тике 500 у каждой из 6 фракций людей больше нуля", all(v > 0 for v in alive.values()),
                     f"людей: {alive}; налётов на объекты {len(obj)}, штурмов {len([e for e in w.events if e['kind'] == 'assault'])}, войн {len([e for e in w.events if e['kind'] == 'war_declared'])}, пропусков {sk}"))
+    elif sc in CR_SCENARIOS:
+        ch = [(e["tick"], e["frm"], e["to"], e["rule"]) for e in w.events if e["kind"] == "archetype_change"]
+        A = w.factions["A"]
+        def ok_(name, cond, det):
+            res.append((name, bool(cond), det))
+        if sc == "CR1":
+            ok_("Культисты ровно на тике 5 по правилу 4", ch == [(5, "Хранители", "Культисты", 4)], f"смены: {ch}")
+        elif sc == "CR2":
+            ok_("20 тиков Культисты, затем при M = 50 Хищники через 3 тика (тик 23, правило 5)", ch == [(23, "Культисты", "Хищники", 5)], f"смены: {ch}")
+        elif sc == "CR3":
+            ok_("Regime ровно на тике 5 по правилу 9", ch == [(5, "Хранители", "Regime", 9)], f"смены: {ch}")
+        elif sc == "CR4":
+            ok_("правило 9 молчит (M < 25), правило 3: Хранители на тике 5", ch == [(5, "Regime", "Хранители", 3)], f"смены: {ch}")
+        elif sc == "CR5":
+            ok_("Идеолог: Культисты на тике 11 по правилу 2, вожак — преемник", ch == [(11, "Хранители", "Культисты", 2)] and A.leader == "A:преемник1", f"смены: {ch}; вожак: {A.leader}")
+        elif sc == "CR7k":
+            ok_("доктрина 0 (контроль): на тике 1 Контролёры по правилу 6", ch[:1] == [(1, "Хищники", "Контролёры", 6)], f"смены: {ch}")
+        elif sc == "CR7":
+            ok_("доктрина 1: до тика 20 смены нет (выход закрыт: R <= 65 и P >= 10)", not [x for x in ch if x[0] <= 20], f"смены: {ch}")
+            ok_("после R = 90 (тик 21) смена на Контролёров", ch[:1] == [(21, "Хищники", "Контролёры", 6)], f"смены: {ch}")
+        elif sc == "CR8":
+            ok_("доктрина 2: до тика 10 уклад Хищники, хотя правило 7 хочет Хранителей", not [x for x in ch if x[0] <= 10] and A.doctrine == 2, f"смены: {ch}")
+            ok_("убийство вожака пробивает доктрину: Хранители на тике 11, RULE_2", ch == [(11, "Хищники", "Хранители", 2)], f"смены: {ch}")
+        elif sc == "CR9":
+            ok_("доктрина 2 при M = 0: уклад не менялся", not ch and A.archetype == "Хищники", f"смены: {ch}")
+            ok_("людей к тику 200 нет: доктрина не делает фракцию вечной", A.manpower == 0, f"людей: {A.manpower}, дезертировало {A.deserted}")
     elif sc in PL_SCENARIOS:
         pf = [(e["tick"], e["action"], e["code"]) for e in w.events if e["kind"] == "player_failed"]
         wd = [(e["tick"], e["initiator"], e["victim"]) for e in w.events if e["kind"] == "war_declared"]
@@ -1466,6 +1529,18 @@ def evaluate(sc: str, p: Params | None = None):
     return all(ok for _, ok, _ in res), res, m, w, series
 
 
+def cr6(p=None):
+    """CR6: обход стека с правилами 4 и 9. Возвращает (ok, деталь)."""
+    from . import evolution as evo
+    p = replace(p or Params(), evo_rule_order=CR_ORDER)
+    bad = evo.shadowed(p) + evo.dead(p)
+    q = replace(Params(), evo_rule_order=(8, 3, 4, 5, 6, 7, 9))
+    sh = evo.shadowed(q)
+    w = evo.walk(p)
+    return (not bad and bool(sh)), (f"полный порядок: мёртвых и затенённых нет ({'да' if not bad else bad}); полосы по M первым срабатыванием: "
+                                  f"{ {x: d['band_first'] for x, d in w.items()} }; при порядке (8, 3, 4, 5, 6, 7, 9) затенены {sh}")
+
+
 def ev10(p=None):
     """EV10: обход стека. Возвращает (ok, деталь)."""
     from . import evolution as evo
@@ -1544,6 +1619,12 @@ REVERSE = {
     "R48": (replace(Params(), evo_rule5_needs_force=False), ("EV18",), "вход в Хищники не требует сил для налёта"),
     "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
+    "R63": (replace(Params(), doctrine_gap_mult=1.0), ("CR7",), "доктрина 1 не удваивает зазор выхода"),
+    "R64": (replace(Params(), doctrine2_freezes=False), ("CR8",), "доктрина 2 не замораживает выход"),
+    "R65": (replace(Params(), evo_hysteresis=False), ("CR2",), "условия выхода не проверяются"),
+    "R66": (replace(Params(), evo_dwell_scale=0.0), ("CR1",), "выдержки нет"),
+    "R67": (replace(Params(), evo_rule_order=(9, 3, 4, 5, 6, 7, 8), evo_rule9_m=0.0), ("CR4",), "правило 9 выше бунта и без M >= 25"),
+    "R68": (replace(Params(), succession_arch={"Осторожный": "Хранители", "Радикальный": "Хищники", "Идеолог": "Хищники"}), ("CR5",), "Идеолог даёт Хищников, не Культистов"),
     "R55": (replace(Params(), incite_cap=1e9), ("PL2",), "потолок добавки снят"),
     "R56": (replace(Params(), bribe_cooldown=0), ("PL6",), "остывания подкупа нет"),
     "R57": (replace(Params(), persuade_min_shock=0.0), ("PL10",), "порог шока для убеждения 0"),

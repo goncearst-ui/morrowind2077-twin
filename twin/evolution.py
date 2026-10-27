@@ -4,7 +4,7 @@
 """
 from math import ceil
 
-RULE_TARGET = {3: "Хранители", 5: "Хищники", 6: "Контролёры", 7: "Хранители", 8: "Дрейфующие"}
+RULE_TARGET = {3: "Хранители", 4: "Культисты", 5: "Хищники", 6: "Контролёры", 7: "Хранители", 8: "Дрейфующие", 9: "Regime"}
 
 
 def clamp(x, lo=0.0, hi=100.0):
@@ -24,6 +24,8 @@ def axis_p(p, shock, tshock=0.0):
 def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True, force=True):
     if rule == 3:
         return m < p.evo_rule3_m and c > p.evo_rule3_c
+    if rule == 4:
+        return m < p.evo_rule4_m and pp > p.evo_rule4_p
     if rule == 5:
         if p.evo_rule5_needs_force and not force:
             return False
@@ -36,6 +38,8 @@ def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True, force=True):
         return r > p.evo_rule7_r and pp < p.evo_rule7_p
     if rule == 8:
         return m < p.evo_rule8_m
+    if rule == 9:
+        return c > p.evo_rule9_c and pp > p.evo_rule9_p and m >= p.evo_rule9_m
     raise ValueError(rule)
 
 
@@ -46,16 +50,28 @@ def first_rule(p, r, pp, c, m, asset, arche=None, owns=True, force=True):
     return None
 
 
-def exit_open(p, arche, r, pp, c, asset, m=100.0):
-    """Шаг 3 фазы 5: условие выхода из текущего уклада (гистерезис)."""
+def exit_open(p, arche, r, pp, c, asset, m=100.0, doctrine=0):
+    """Шаг 3 фазы 5: условие выхода из текущего уклада (гистерезис).
+    Доктрина 1 [док 07]: порог выхода отодвигается от порога входа в doctrine_gap_mult раз дальше; доктрина 2: выход закрыт."""
     if not p.evo_hysteresis:
         return True
+    if doctrine == 2 and p.doctrine2_freezes:
+        return False
+    k = p.doctrine_gap_mult if doctrine == 1 else 1.0
+
+    def thr(entry, exit_):
+        return entry + k * (exit_ - entry)
+
     if arche == "Хищники":
-        return r > p.evo_exit_pred_r or pp < p.evo_exit_pred_p
+        return r > thr(p.evo_rule5_r, p.evo_exit_pred_r) or pp < thr(p.evo_rule5_p, p.evo_exit_pred_p)
     if arche == "Хранители":
-        return r < p.evo_exit_guard_r or pp > p.evo_exit_guard_p
+        return r < thr(p.evo_rule7_r, p.evo_exit_guard_r) or pp > thr(p.evo_rule7_p, p.evo_exit_guard_p)
     if arche == "Контролёры":
-        return (not asset) or c < p.evo_exit_ctrl_c or m < p.evo_rule3_m   # коллапс морали открывает выход, иначе бунт (правило 3) недостижим у Контролёров
+        return (not asset) or c < thr(p.evo_rule6_c, p.evo_exit_ctrl_c) or m < p.evo_rule3_m   # коллапс морали открывает выход, иначе бунт (правило 3) недостижим у Контролёров
+    if arche == "Культисты":
+        return m > thr(p.evo_rule4_m, p.evo_exit_cult_m) or pp < thr(p.evo_rule4_p, p.evo_exit_cult_p)
+    if arche == "Regime":
+        return c < thr(p.evo_rule9_c, p.evo_exit_regime_c) or pp < thr(p.evo_rule9_p, p.evo_exit_regime_p) or m < p.evo_rule9_m   # на дне морали жёсткий контроль ломается [док 07]
     return True   # Дрейфующие: выход открыт (решение Стана, intent 21 вопрос 3)
 
 

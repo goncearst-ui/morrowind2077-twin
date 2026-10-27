@@ -56,6 +56,7 @@ class Faction:
     wounded_queue: list = field(default_factory=list)   # [тик возврата, ведро, число]
     captured: int = 0               # брошенные раненые, попавшие в плен (выбыли из фракции)
     absorbed: int = 0               # принятые пленные других фракций (прибавка к старту для сохранения людей)
+    doctrine: int = 0               # TF_Doctrine 0–2, константа фракции (spec 21c, док 07)
     named: list = field(default_factory=list)   # именные: dict(name, role, profile, alive) (spec 21b); пусто = вожака нет в модели
     leader: str | None = None       # имя действующего вожака (spec 21b)
     rank: int = 0                   # ярусы (spec 04): рядовые, ветераны, офицеры; сумма = Manpower
@@ -515,6 +516,8 @@ class World:
         if self.p.evolution_enabled:
             self.evolution_step()
         # фаза 7 — решения
+        if self.p.evolution_enabled and sum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
+            raise ValueError("доктрина != 0 разрешена не более чем одной фракции (док 07)")
         for act in self.player_script.get(self.tick, []):
             self.player_action(act)
         for f in fs:
@@ -1397,7 +1400,7 @@ class World:
             if rule is not None:
                 self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
             cand = evo.RULE_TARGET[rule] if rule is not None else None
-            if cand is None or cand == f.archetype or not evo.exit_open(p, f.archetype, f.ax_r, f.ax_p, f.ctl, asset, f.morale):
+            if cand is None or cand == f.archetype or not evo.exit_open(p, f.archetype, f.ax_r, f.ax_p, f.ctl, asset, f.morale, f.doctrine):
                 self._pending(f, None, 0)
                 continue
             n = f.pending_ticks + 1 if cand == f.pending else 1

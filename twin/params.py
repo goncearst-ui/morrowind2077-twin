@@ -23,7 +23,8 @@ class Params:
     # --- 06 экономика ---
     per_head_cost: float = 3.0                     # Ставка: 3 порции в сутки, решение Стана 2026-10-25 (intent 03a); в 06 записано 8
     archetype_cost_mult: dict = field(default_factory=lambda: {
-        "Хранители": 0.8, "Хищники": 1.15, "Контролёры": 1.0, "Дрейфующие": 1.0})  # [док 06]
+        "Хранители": 0.8, "Хищники": 1.15, "Контролёры": 1.0, "Дрейфующие": 1.0,
+        "Культисты": 1.2, "Regime": 1.0})  # [док 06]; Культисты и Regime — [предл], spec 21c
     worker_yield: float = 4.0                      # доход за работника сверх MinCrew, до потолка объекта [предл], утверждено 2026-10-25 (spec 03a)
     crew_cap: dict = field(default_factory=lambda: {
         "Перевал": 40, "Насосная": 15, "Жила": 20})            # потолок работников на объекте [предл], утверждено 2026-10-25 (spec 03a; «Жила» — spec 03b)
@@ -45,7 +46,8 @@ class Params:
     raid_cost: float = 8.0                         # [док 06]
     raid_cooldown: int = 5                         # [док 06] «~5 суток»
     share_rate: dict = field(default_factory=lambda: {
-        "Хищники": 0.35, "Контролёры": 0.10, "Хранители": 0.0, "Дрейфующие": 0.0})  # [док 06]
+        "Хищники": 0.35, "Контролёры": 0.10, "Хранители": 0.0, "Дрейфующие": 0.0,
+        "Культисты": 0.0, "Regime": 0.10})  # [док 06]; Культисты и Regime — [предл], spec 21c
     depot_loss_rate: float = 0.30                  # DepotLossRate: часть запаса, уничтоженная при ударе по складу [док 06]
     depot_armory_rate: float = 0.25                # DepotArmoryRate [док 06]
     raiding_archetypes: tuple = ("Хищники",)       # [док 06]
@@ -120,7 +122,8 @@ class Params:
     # --- 08a отношения и обида (spec 08a); порядок осей и весов: см. комментарии ---
     relations_enabled: bool = False                # False = журнал как до 08a (регрессия строка в строку) [предл]
     rel_axes: dict = field(default_factory=lambda: {   # (Exp, Ins, Leg) [док 08]
-        "Хранители": (0, 0, 2), "Хищники": (2, 1, 0), "Контролёры": (1, 1, 1), "Дрейфующие": (0, 0, 0)})
+        "Хранители": (0, 0, 2), "Хищники": (2, 1, 0), "Контролёры": (1, 1, 1), "Дрейфующие": (0, 0, 0),
+        "Культисты": (0, 2, 0), "Regime": (1, 2, 1)})   # [док 08; концепт 16.2] для Культистов и Regime
     rel_weights: tuple = (2.0, 1.5, -1.0, 2.0)     # Exp, Ins, Leg(A) при Leg(B) > 0, добавка при Leg(B) = 0 и Leg(A) >= 1 [док 08]
     rel_level_cuts: tuple = (1.0, 3.0, 5.0, 7.0)   # Ally < 1 <= Neutral < 3 <= напряжение < 5 <= Enemy < 7 <= Archnemesis [док 08]
     grudge_event: float = 3.0                      # налёт на объект или штурм: обида пострадавшего к обидчику [док 08]
@@ -168,7 +171,8 @@ class Params:
     evo_r_full_days: float = 30.0                  # R = 100 при запасе в столько суток [предл; в 00 «R = f(DaysOfSupply, Manpower)»]
     evo_p_scale: float = 2.5                       # P = scale × личный шок; территориального шока нет (13) [предл]; при 1.5 правило 5 в живых прогонах не срабатывало ни разу (отчёт 21a), при 2.5 срабатывает
     evo_c_rest: dict = field(default_factory=lambda: {
-        "Хранители": 50.0, "Хищники": 40.0, "Контролёры": 65.0, "Дрейфующие": 20.0})   # старт и «покой» оси C по укладу [предл]
+        "Хранители": 50.0, "Хищники": 40.0, "Контролёры": 65.0, "Дрейфующие": 20.0,
+        "Культисты": 30.0, "Regime": 80.0})   # старт и «покой» оси C по укладу [предл]
     evo_c_win: float = 10.0                        # C за победу в штурме или войне [предл, концепт §13.2]
     evo_c_desertion: float = 1.0                   # C за каждого дезертира [предл, §13.2]
     evo_c_relax: float = 1.0                       # затухание C к покойному значению в сутки [предл]
@@ -184,7 +188,7 @@ class Params:
     evo_rule7_r: float = 70.0                      # [док 07] Хранители: R > 70 и P < 35
     evo_rule7_p: float = 35.0
     evo_rule8_m: float = 20.0                      # [док 07] Дрейфующие: M < 20
-    evo_dwell: dict = field(default_factory=lambda: {3: 5, 5: 3, 6: 1, 7: 5, 8: 5})   # выдержка, тиков: [док 07], для правила 6 [предл]
+    evo_dwell: dict = field(default_factory=lambda: {3: 5, 4: 5, 5: 3, 6: 1, 7: 5, 8: 5, 9: 5})   # выдержка, тиков: [док 07], для правила 6 [предл]
     evo_dwell_scale: float = 1.0                   # 0 = выдержки нет (обратная проверка R41)
     evo_cooldown: int = 7                          # [док 07]
     evo_hysteresis: bool = True                    # False = условия выхода не проверяются (обратная проверка R39)
@@ -199,11 +203,25 @@ class Params:
     evo_t_site: float = 25.0                       # tshock за потерянный объект (= shock_event_cap) [предл; решение Стана: территориальный шок вводим]
     evo_share_shock_k: float = 60.0                # [док 06] ShareShockK
 
+    # --- 21c: правила 4 и 9, доктрина (docs 07; spec 21c); в evo_rule_order по умолчанию не включены ---
+    evo_rule4_m: float = 30.0                      # [док 07] Культисты: M < 30 и P > 70
+    evo_rule4_p: float = 70.0
+    evo_rule9_c: float = 75.0                      # [док 07] Regime: C > 75, P > 50, M >= 25
+    evo_rule9_p: float = 50.0
+    evo_rule9_m: float = 25.0
+    evo_exit_cult_m: float = 40.0                  # [предл] выход из Культистов: M > 40 или P < 55
+    evo_exit_cult_p: float = 55.0
+    evo_exit_regime_c: float = 65.0                # [предл] выход из Regime: C < 65 или P < 40 или M < 25
+    evo_exit_regime_p: float = 40.0
+    doctrine_gap_mult: float = 2.0                 # доктрина 1: зазор вход–выход вдвое больше [док 07 «двойной запас»]
+    doctrine_max_factions: int = 1                 # [док 07] не более одной фракции с доктриной != 0
+    doctrine2_freezes: bool = True                 # доктрина 2: выход по осям отключён [док 07]
+
     # --- 21b: именные, вожак, преемник (docs 05, 07, 01) ---
     leader_enabled: bool = False                   # False = журнал как до 21b; требует evolution_enabled [предл]
     evo_c_leader_loss: float = 30.0                # C падает при гибели вожака [док 05 «Control падает»; число предл]
     evo_m_leader_loss: float = 10.0                # M падает при гибели вожака [док 05; число предл]
-    succession_arch: dict = field(default_factory=lambda: {"Осторожный": "Хранители", "Радикальный": "Хищники"})   # профиль преемника -> уклад [док 05]; Идеолог — 21c
+    succession_arch: dict = field(default_factory=lambda: {"Осторожный": "Хранители", "Радикальный": "Хищники", "Идеолог": "Культисты"})   # профиль преемника -> уклад [док 05]; Идеолог — 21c
     leader_kill_seat: bool = False                 # штурм склада убивает вожака защитника; по умолчанию вожак «заперт», как в enRAGE [предл]
     leader_kill_broken: bool = False               # конец войны «сломлены» убивает вожака проигравшего [предл]
     named_max: int = 10                            # именных на фракцию [док 01, 03: 5–10]
@@ -216,7 +234,7 @@ class Params:
     # --- 21d: рычаги игрока (docs 08, 01; spec 21d) ---
     player_levers_enabled: bool = False            # False = журнал как до 21d; действия bribe/tip/persuade дают ошибку [предл]
     bribe_price_h: float = 100.0                   # цена +1 к H в единицах запаса, до множителя профиля [предл]
-    bribe_profile_mult: dict = field(default_factory=lambda: {"Основатель": 1.0, "Радикальный": 0.5, "Осторожный": 2.0})   # [предл]
+    bribe_profile_mult: dict = field(default_factory=lambda: {"Основатель": 1.0, "Радикальный": 0.5, "Осторожный": 2.0, "Идеолог": 3.0})   # [предл]
     incite_cap: float = 6.0                        # потолок добавки пары (A→B) [предл; док 08: разжигание +5]
     incite_decay: float = 1.0                      # затухание добавки [док 08: −1 / 10 суток]
     incite_decay_every: int = 10
