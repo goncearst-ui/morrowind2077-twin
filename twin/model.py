@@ -705,6 +705,8 @@ class World:
             if not f.forced_mode:
                 self.setf(f, "forced_mode", True, 3, "05", "FORCED_LABOR")
             return
+        if p.evolution_enabled and p.predators_keep_without_site and f.archetype == "Хищники" and not self.owned(f):
+            return   # spec 21a-4: без объектов не изгоняют, держатся на контрабанде
         # Хищники и прочие «изгоняющие» (R6): изгонять, пока расход не впишется в ожидаемый приход
         before, n = f.manpower + f.wounded, 0
         while n < p.expel_cap_per_tick and (f.manpower > 0 or f.wounded > 0) and self.expense(f) > self.expected_income(f):

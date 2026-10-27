@@ -55,7 +55,7 @@ RB_SCENARIOS = ("RB1", "RB2", "RB3", "RB4", "RB5")
 SW_SCENARIOS = ("SW1", "SW2")
 EV_PIN = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV18")   # spec 21a: оси задаёт подвязка сценария
 EV_WORLD = ("EV12", "EV13")                                                  # spec 21a: мир SW со сменой уклада
-EV_MECH = ("EV14", "EV15", "EV16", "EV17")
+EV_MECH = ("EV14", "EV15", "EV16", "EV17", "EV19")
 EV_SCENARIOS = EV_PIN + EV_WORLD + EV_MECH
 
 
@@ -421,6 +421,13 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World(fs, ss, p)
         w.known_at_start = {n: tuple(x.name for x in ss if x.owner != n) for n, (a_, m_) in kinds.items() if a_ in ("Хищники", "Контролёры")}
         horizon = 500
+    elif sc == "EV19":
+        # spec 21a-4: Хищники без объектов, голод, решения и контрабанда включены, остальное выключено
+        p = replace(p, evolution_enabled=True, raids_enabled=False, object_raids_enabled=False, fees_enabled=False,
+                    prisoner_sale_enabled=False, archetype_assault_threshold={})
+        w = World({"A": faction(p, "A", "Хищники", 30, 3, 0)}, [], p)
+        w.factions["A"].morale = 40.0
+        horizon = 8
     elif sc in EV_PIN or sc in EV_MECH:
         # spec 21a: чистая обстановка; оси в EV1–EV9 задаёт подвязка, голод, недоплата, рост C и M отключены
         p = replace(p, evolution_enabled=True, hunger_threshold=0.0, underpay_morale=0.0, raids_enabled=False,
@@ -1104,6 +1111,11 @@ def check(sc: str, w: World, series):
             a = mine("A")
             ok_("смена на Хищников ровно на тике 3 по правилу 5, до этого уклад не менялся", a == [(3, "Хранители", "Хищники", 5)], f"смены: {a}")
             ok_("pending = Хищники на тиках 1 и 2", [(r[0], r[5]) for r in rows("A.pending") if r[0] <= 2] == [(1, "Хищники")], f"pending: {[(r[0], r[5]) for r in rows('A.pending')]}")
+        elif sc == "EV19":
+            ex = [e for e in w.events if e["kind"] == "expel"]
+            sm = [r for r in w.log if r[6] == "SMUGGLING" and r[3] == "A.supply"]
+            ok_("за 8 тиков изгнаний нет", not ex, f"изгнаний: {len(ex)}")
+            ok_("контрабанда идёт (строки SMUGGLING есть)", bool(sm), f"строк SMUGGLING: {len(sm)}")
         elif sc == "EV18":
             ok_("с оружием 50 и 30 людьми B уходит в Хищники на тике 3", mine("B") == [(3, "Хранители", "Хищники", 5)], f"B: {mine('B')}")
             ok_("с оружием 10 A при тех же осях остаётся Хранителем: хищничать нечем", mine("A") == [], f"A: {mine('A')}")
@@ -1270,6 +1282,7 @@ REVERSE = {
     "R43": (replace(Params(), evo_rule_order=(8, 3, 5, 6, 7)), ("EV5",), "catch-all (правило 8) стоит первым"),
     "R44": (replace(Params(), evo_m_recover=0.0), ("EV14",), "мораль не растёт"),
     "R46": (replace(Params(), evo_drifter_needs_site=False), ("EV7",), "Дрейфующие без объекта тоже уходят по правилу 7 (ловушка открыта)"),
+    "R49": (replace(Params(), predators_keep_without_site=False), ("EV19",), "Хищники без объектов изгоняют людей как раньше"),
     "R48": (replace(Params(), evo_rule5_needs_force=False), ("EV18",), "вход в Хищники не требует сил для налёта"),
     "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
