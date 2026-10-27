@@ -70,6 +70,7 @@ class Faction:
     pending_ticks: int = 0
     cooldown: int = 0
     changes: int = 0                # число смен уклада (метрики 21a)
+    tshock: float = 0.0             # территориальный шок (21a-2): потерянные объекты, затухает как личный
 
     @property
     def manpower(self) -> int:
@@ -1143,7 +1144,7 @@ class World:
         if f.ctl is None:
             f.ctl = p.evo_c_rest[f.archetype]
             self.rec(4, "07", f"{f.name}.C", None, f.ctl, "AXIS_INIT")
-        r, pp = evo.axis_r(p, f.days_supply, f.manpower), evo.axis_p(p, f.shock)
+        r, pp = evo.axis_r(p, f.days_supply, f.manpower), evo.axis_p(p, f.shock, f.tshock)
         self.setf(f, "ax_r", r, 4, "07", "AXIS")
         self.setf(f, "ax_p", pp, 4, "07", "AXIS")
 
@@ -1163,6 +1164,12 @@ class World:
             elif e["kind"] == "desertion":
                 f = self.factions[e["faction"]]
                 self.setf(f, "ctl", max(0.0, f.ctl - p.evo_c_desertion * e["n"]), 4, "07", "C_DESERTION")
+            if e["kind"] == "assault" and e["attacker_wins"]:
+                f = self.factions[e["defender"]]
+                self.setf(f, "tshock", f.tshock + p.evo_t_site, 4, "04", "TERRITORIAL")
+            elif e["kind"] == "surrender":
+                f = self.factions[e["faction"]]
+                self.setf(f, "tshock", f.tshock + p.evo_t_site, 4, "04", "TERRITORIAL")
 
     def evolution_step(self):
         p = self.p
@@ -1170,6 +1177,8 @@ class World:
         for f in fs:
             if f.ctl is None:
                 self._evo_axes(f)   # первичная инициализация C до чтения событий
+        for f in fs:
+            self.setf(f, "tshock", max(0.0, f.tshock - p.shock_decay_per_tick), 4, "04", "DECAY_T")
         self._evo_events()
         for f in fs:
             if f.manpower == 0:
@@ -1190,7 +1199,7 @@ class World:
                 self.setf(f, "cooldown", f.cooldown - 1, 5, "07", "COOLDOWN")
                 continue
             asset = bool(self.staffed(f))
-            rule = evo.first_rule(p, f.ax_r, f.ax_p, f.ctl, f.morale, asset)
+            rule = evo.first_rule(p, f.ax_r, f.ax_p, f.ctl, f.morale, asset, f.archetype, bool(self.owned(f)))
             if rule is not None:
                 self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
             cand = evo.RULE_TARGET[rule] if rule is not None else None

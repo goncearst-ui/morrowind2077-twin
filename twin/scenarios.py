@@ -55,7 +55,7 @@ RB_SCENARIOS = ("RB1", "RB2", "RB3", "RB4", "RB5")
 SW_SCENARIOS = ("SW1", "SW2")
 EV_PIN = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9")   # spec 21a: оси задаёт подвязка сценария
 EV_WORLD = ("EV12", "EV13")                                                  # spec 21a: мир SW со сменой уклада
-EV_MECH = ("EV14", "EV15")
+EV_MECH = ("EV14", "EV15", "EV16", "EV17")
 EV_SCENARIOS = EV_PIN + EV_WORLD + EV_MECH
 
 
@@ -433,11 +433,16 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             arche = {"EV2": "Хищники", "EV3": "Хищники", "EV5": "Контролёры", "EV8": "Хранители"}[sc]
             w = World({"A": faction(p, "A", arche, 30, 20, 10)}, [site], p)
         elif sc == "EV7":
-            w = World({"A": faction(p, "A", "Дрейфующие", 30, 20, 0), "B": faction(p, "B", "Дрейфующие", 30, 20, 0)}, [], p)
+            site7 = Site("Объект", 10, 0, 4, owner="A", income_disabled=True)
+            w = World({"A": faction(p, "A", "Дрейфующие", 30, 20, 10), "B": faction(p, "B", "Дрейфующие", 30, 20, 0),
+                       "C": faction(p, "C", "Дрейфующие", 30, 20, 0)}, [site7], p)
         elif sc == "EV14":
             w = World({"A": faction(p, "A", "Хранители", 30, 40, 0)}, [], p)
             w.factions["A"].morale = 40.0
-        elif sc == "EV15":
+        elif sc == "EV17":
+            ss = [Site("Дорогой", 40, 90, 4, owner="A"), Site("Дешёвый", 10, 20, 2)]
+            w = World({"A": faction(p, "A", "Хранители", 30, 3, 40)}, ss, p)
+        elif sc in ("EV15", "EV16"):
             site = Site("Перевал", 40, 90, 4, owner="B")
             p = replace(p, hunger_threshold=10.0)    # B голодает и теряет дезертиров
             w = World({"A": faction(p, "A", "Хищники", 90, 60, 0), "B": faction(p, "B", "Хранители", 30, 3, 40)}, [site], p)
@@ -459,8 +464,8 @@ def build(sc: str, p: Params) -> tuple[World, int]:
             "EV9": [(t, *( (3, 31, 60, 40) if (t - 1) // 25 % 2 == 0 else (27, 0, 60, 50) )) for t in range(25, 201, 25)],
         }
         if sc == "EV7":
-            w.scheduled = {t: [ev_pins("A", [(8, 27, 0, 10, 20)]), ev_pins("B", [(8, 3, 31, 10, 20)])] for t in range(1, 9)}
-            horizon = 8
+            w.scheduled = {t: [ev_pins("A", [(12, 27, 0, 10, 20)]), ev_pins("B", [(12, 3, 31, 10, 20)]), ev_pins("C", [(12, 27, 0, 10, 20)])] for t in range(1, 13)}
+            horizon = 12
         elif sc in pins:
             horizon = {"EV1": 6, "EV2": 24, "EV3": 14, "EV4": 8, "EV5": 8, "EV6": 8, "EV8": 50, "EV9": 200}[sc]
             w.scheduled = {t: [ev_pins("A", pins[sc])] for t in range(1, horizon + 1)}
@@ -477,13 +482,18 @@ def build(sc: str, p: Params) -> tuple[World, int]:
     return w, horizon
 
 
-def run(sc: str, p: Params | None = None):
+def run(sc: str, p: Params | None = None, evo: bool | None = None):
+    """evo: None = по умолчанию (прежние сценарии идут с evolution_enabled = False, новые EV — как задаёт build); True/False — явно (spec 21a-2 §1.4)."""
     if p is None:
         p = Params()
         if sc in RB_SCENARIOS or sc in SW_SCENARIOS or sc in EV_WORLD:
             p = replace(p, raid_discipline_enabled=True)   # spec 20: по умолчанию сценарии RB и SW идут с дисциплиной налётов; обратные проверки передают False явно
         if sc in SW_SCENARIOS or sc in WS_SCENARIOS or sc in EV_WORLD:
             p = replace(p, war_steers_attacks=True)   # spec 08d: по умолчанию сценарии WS идут с управлением; обратные проверки передают False явно
+    if evo is None and not sc.startswith("EV"):
+        evo = False   # прежние 70 сценариев проверяют механику при неизменном укладе; критерии не менять (spec 21a-2 §1.4)
+    if evo is not None:
+        p = replace(p, evolution_enabled=evo)
     w, horizon = build(sc, p)
     series = {n: [(0, f.manpower)] for n, f in w.factions.items()}
     for _ in range(horizon):
@@ -1113,8 +1123,9 @@ def check(sc: str, w: World, series):
             ok_("catch-all: Хранители → Дрейфующие через 5 тиков по правилу 8", a == [(5, "Хранители", "Дрейфующие", 8)], f"смены: {a}")
             ok_("доли обе 0: цены перемены нет", not rows("A.morale", "SHARE_SHOCK"), f"строки: {rows('A.morale', 'SHARE_SHOCK')}")
         elif sc == "EV7":
-            ok_("Дрейфующие при R = 90, P = 0 уходят в Хранители через 5 тиков (правило 7 выше правила 8)", mine("A") == [(5, "Дрейфующие", "Хранители", 7)], f"A: {mine('A')}")
-            ok_("Дрейфующие при R = 10, P = 78 уходят в Хищники через 3 тика (правило 5)", mine("B") == [(3, "Дрейфующие", "Хищники", 5)], f"B: {mine('B')}")
+            ok_("Дрейфующие с объектом при R = 90, P = 0 уходят в Хранители через 5 тиков (правило 7 выше правила 8)", mine("A") == [(5, "Дрейфующие", "Хранители", 7)], f"A: {mine('A')}")
+            ok_("Дрейфующие при R = 10, P = 78 уходят в Хищники через 3 тика (правило 5, объект не нужен)", mine("B") == [(3, "Дрейфующие", "Хищники", 5)], f"B: {mine('B')}")
+            ok_("Дрейфующие без объекта при R = 90 остаются Дрейфующими 12 тиков (ловушка закрыта)", mine("C") == [], f"C: {mine('C')}")
         elif sc == "EV8":
             a = mine("A")
             want = [("Хранители", "Хищники", 5), ("Хищники", "Контролёры", 6), ("Контролёры", "Хранители", 3), ("Хранители", "Дрейфующие", 8), ("Дрейфующие", "Хранители", 7)]
@@ -1142,6 +1153,7 @@ def check(sc: str, w: World, series):
             if sc == "EV13":
                 dead_early = [n for n, f in w.factions.items() if f.manpower == 0 and f.changes < 2]
                 ok_("нет вымирания раньше двух смен (docs/07 S3)", not dead_early, f"вымерли с менее чем двумя сменами: {dead_early}; итог (уклад, смен, людей): {summary}")
+                ok_("Дрейфующие X6 к тику 500 живы (spec 21a-2)", w.factions["X6"].manpower > 0, f"X6: уклад {w.factions['X6'].archetype}, людей {w.factions['X6'].manpower}, смен {w.factions['X6'].changes}, объектов {len(w.owned(w.factions['X6']))}")
             else:
                 ok_("итог мира измерен (уклад, смен, людей)", True, f"{summary}")
         elif sc == "EV14":
@@ -1157,6 +1169,15 @@ def check(sc: str, w: World, series):
             ok_("после победы C тянется к покойному 40 на 1 в сутки", bool(rl) and all(abs(x[1] - x[2] - 1.0) < 1e-6 for x in rl), f"строки C_RELAX: {rl[:4]}…")
             cd = [(r[0], r[4], r[5]) for r in rows("B.ctl", "C_DESERTION")]
             ok_("дезертир опускает C на 1", bool(cd) and all(abs(x[1] - x[2] - 1.0) < 1e-6 for x in cd), f"строки C_DESERTION: {cd}")
+        elif sc == "EV16":
+            tb = [(r[0], r[4], r[5]) for r in rows("B.tshock")]
+            ok_("B потеряла объект на тике 5: tshock 0 → 25 на тике 6, затем 17, 9, 1, 0", [(x[0], x[2]) for x in tb] == [(6, 25.0), (7, 17.0), (8, 9.0), (9, 1.0), (10, 0.0)], f"строки B.tshock: {tb}")
+            ok_("у победителя A территориального шока нет", not rows("A.tshock"), f"строки A.tshock: {rows('A.tshock')}")
+            pb = [(r[0], r[5]) for r in rows("B.ax_p") if r[0] == 6]
+            ok_("P у B на тике 6 не ниже 62.5 (2.5 × 25 одного территориального шока)", bool(pb) and pb[-1][1] >= 62.5 - 1e-6, f"B.ax_p на тике 6: {pb}")
+        elif sc == "EV17":
+            ta = [(r[0], r[4], r[5]) for r in rows("A.tshock")]
+            ok_("сдача актива на тике 1: tshock 0 → 25 на тике 2, затем падает на 8", ta[:2] == [(2, 0.0, 25.0), (3, 25.0, 17.0)], f"строки A.tshock: {ta[:4]}")
     return res, m
 
 
@@ -1186,7 +1207,7 @@ def ev11(scenarios):
     for k in (0.3, 0.0):
         hits = {}
         for sc in scenarios:
-            w, _ = run(sc, replace(Params(), evolution_enabled=True, morale_hunger_k=k))
+            w, _ = run(sc, replace(Params(), morale_hunger_k=k), evo=True)
             for r, n in w.rule_hits.items():
                 hits[r] = hits.get(r, 0) + n
         out[k] = hits
@@ -1239,5 +1260,7 @@ REVERSE = {
     "R42": (replace(Params(), evo_share_shock_k=0.0), ("EV5",), "смена уклада не бьёт по морали"),
     "R43": (replace(Params(), evo_rule_order=(8, 3, 5, 6, 7)), ("EV5",), "catch-all (правило 8) стоит первым"),
     "R44": (replace(Params(), evo_m_recover=0.0), ("EV14",), "мораль не растёт"),
+    "R46": (replace(Params(), evo_drifter_needs_site=False), ("EV7",), "Дрейфующие без объекта тоже уходят по правилу 7 (ловушка открыта)"),
+    "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
 }

@@ -17,11 +17,11 @@ def axis_r(p, days_supply, manpower):
     return clamp(100.0 * min(days_supply, 999.0) / p.evo_r_full_days)
 
 
-def axis_p(p, shock):
-    return clamp(p.evo_p_scale * shock)
+def axis_p(p, shock, tshock=0.0):
+    return clamp(p.evo_p_scale * (shock + tshock))
 
 
-def fires(p, rule, r, pp, c, m, asset):
+def fires(p, rule, r, pp, c, m, asset, arche=None, owns=True):
     if rule == 3:
         return m < p.evo_rule3_m and c > p.evo_rule3_c
     if rule == 5:
@@ -29,15 +29,17 @@ def fires(p, rule, r, pp, c, m, asset):
     if rule == 6:
         return asset and c > p.evo_rule6_c
     if rule == 7:
+        if p.evo_drifter_needs_site and arche == "Дрейфующие" and not owns:
+            return False
         return r > p.evo_rule7_r and pp < p.evo_rule7_p
     if rule == 8:
         return m < p.evo_rule8_m
     raise ValueError(rule)
 
 
-def first_rule(p, r, pp, c, m, asset):
+def first_rule(p, r, pp, c, m, asset, arche=None, owns=True):
     for rule in p.evo_rule_order:
-        if fires(p, rule, r, pp, c, m, asset):
+        if fires(p, rule, r, pp, c, m, asset, arche, owns):
             return rule
     return None
 
