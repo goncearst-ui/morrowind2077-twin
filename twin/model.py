@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from math import ceil, floor
 
 from .params import Params
+from . import evolution as evo
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
 BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold", "captured")  # куда уходят люди; сумма с живыми = старт (§1)
@@ -62,6 +63,13 @@ class Faction:
     last_paid: dict = field(default_factory=lambda: {"rank": 0, "vet": 0, "off": 0})        # тик последней выплаты по ярусу
     underpaid: dict = field(default_factory=lambda: {"rank": False, "vet": False, "off": False})
     reorg_queue: list = field(default_factory=list)  # тики срабатывания отложенных реорганизаций
+    ctl: float | None = None        # ось C, TF_Control (21a); None = ещё не задана
+    ax_r: float = 0.0               # ось R (21a), публикуемая производная
+    ax_p: float = 0.0               # ось P (21a)
+    pending: str | None = None      # уклад, к которому идёт смена (зеркало TF_PendingArch, 21a)
+    pending_ticks: int = 0
+    cooldown: int = 0
+    changes: int = 0                # число смен уклада (метрики 21a)
 
     @property
     def manpower(self) -> int:
@@ -115,6 +123,8 @@ class World:
     truce: dict = field(default_factory=dict)            # (A, B) по алфавиту -> тик конца перемирия
     last_war_tick: int = -10**9
     raid_last: dict = field(default_factory=dict)        # (налётчик, объект) -> тик последнего налёта (spec 20)
+    evo_cursor: int = 0                                  # сколько событий из events уже учтено осями C и M (spec 21a)
+    rule_hits: dict = field(default_factory=dict)        # правило -> сколько раз оно сработало первым у живой фракции (spec 21a)
 
     @property
     def prosperity(self) -> float:
@@ -489,6 +499,9 @@ class World:
         # фаза 4 — производные
         for f in fs:
             self.publish_dos(f)
+        # фазы 4–6 — модуль 07 (spec 21a): оси, стек правил, смена уклада
+        if self.p.evolution_enabled:
+            self.evolution_step()
         # фаза 7 — решения
         for f in fs:
             self.surrender(f)
@@ -1122,3 +1135,85 @@ class World:
                 self.rec(8, "08b", f"war.{a}>{b}.goal", None, goal.name, "WAR_DECLARED")
                 self.rec(8, "08b", f"war.{a}>{b}.state", 0, 1, "WAR_DECLARED")
                 self.events.append(dict(kind="war_declared", tick=self.tick, initiator=a, victim=b, goal=goal.name))
+
+    # ---------- 21a: модуль 07, оси и стек правил ----------
+    def _evo_axes(self, f: Faction):
+        """Фаза 4: оси R, P (производные) и C, M (события тика читаются на следующем тике, как в 08a)."""
+        p = self.p
+        if f.ctl is None:
+            f.ctl = p.evo_c_rest[f.archetype]
+            self.rec(4, "07", f"{f.name}.C", None, f.ctl, "AXIS_INIT")
+        r, pp = evo.axis_r(p, f.days_supply, f.manpower), evo.axis_p(p, f.shock)
+        self.setf(f, "ax_r", r, 4, "07", "AXIS")
+        self.setf(f, "ax_p", pp, 4, "07", "AXIS")
+
+    def _evo_events(self):
+        """События с прошлого чтения: победа поднимает C и M, дезертирство опускает C."""
+        p = self.p
+        new = self.events[self.evo_cursor:]
+        self.evo_cursor = len(self.events)
+        for e in new:
+            if e["kind"] == "assault" and e["attacker_wins"]:
+                f = self.factions[e["attacker"]]
+                self.setf(f, "ctl", min(100.0, f.ctl + p.evo_c_win), 4, "07", "C_WIN")
+                self.setf(f, "morale", min(p.evo_m_max, f.morale + p.evo_m_win), 4, "07", "M_WIN")
+            elif e["kind"] == "war_end" and e.get("winner"):
+                f = self.factions[e["winner"]]
+                self.setf(f, "ctl", min(100.0, f.ctl + p.evo_c_win), 4, "07", "C_WIN")
+            elif e["kind"] == "desertion":
+                f = self.factions[e["faction"]]
+                self.setf(f, "ctl", max(0.0, f.ctl - p.evo_c_desertion * e["n"]), 4, "07", "C_DESERTION")
+
+    def evolution_step(self):
+        p = self.p
+        fs = list(self.factions.values())
+        for f in fs:
+            if f.ctl is None:
+                self._evo_axes(f)   # первичная инициализация C до чтения событий
+        self._evo_events()
+        for f in fs:
+            if f.manpower == 0:
+                continue
+            rest = p.evo_c_rest[f.archetype]
+            if f.ctl > rest:
+                self.setf(f, "ctl", max(rest, f.ctl - p.evo_c_relax), 4, "07", "C_RELAX")
+            elif f.ctl < rest:
+                self.setf(f, "ctl", min(rest, f.ctl + p.evo_c_relax), 4, "07", "C_RELAX")
+            if f.days_supply >= p.hunger_threshold and p.evo_m_recover > 0 and f.morale < p.evo_m_max:
+                self.setf(f, "morale", min(p.evo_m_max, f.morale + p.evo_m_recover), 4, "07", "M_RECOVER")
+            self._evo_axes(f)
+        # фаза 5 — проверка правил; фаза 6 — применение
+        for f in fs:
+            if f.manpower == 0:
+                continue
+            if f.cooldown > 0:
+                self.setf(f, "cooldown", f.cooldown - 1, 5, "07", "COOLDOWN")
+                continue
+            asset = bool(self.staffed(f))
+            rule = evo.first_rule(p, f.ax_r, f.ax_p, f.ctl, f.morale, asset)
+            if rule is not None:
+                self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
+            cand = evo.RULE_TARGET[rule] if rule is not None else None
+            if cand is None or cand == f.archetype or not evo.exit_open(p, f.archetype, f.ax_r, f.ax_p, f.ctl, asset, f.morale):
+                self._pending(f, None, 0)
+                continue
+            n = f.pending_ticks + 1 if cand == f.pending else 1
+            self._pending(f, cand, n)
+            if n >= evo.dwell(p, rule):
+                self._switch(f, cand, rule)
+
+    def _pending(self, f: Faction, cand, n):
+        self.setf(f, "pending", cand, 5, "07", "PENDING")
+        self.setf(f, "pending_ticks", n, 5, "07", "PENDING")
+
+    def _switch(self, f: Faction, cand: str, rule: int):
+        p = self.p
+        old = f.archetype
+        self.setf(f, "archetype", cand, 6, "07", f"RULE_{rule}")
+        dm = -(p.share_rate[old] - p.share_rate[cand]) * p.evo_share_shock_k
+        if dm:
+            self.setf(f, "morale", max(0.0, min(p.evo_m_max, f.morale + dm)), 6, "07", "SHARE_SHOCK")
+        self.setf(f, "cooldown", p.evo_cooldown, 6, "07", f"RULE_{rule}")
+        f.changes += 1
+        self._pending(f, None, 0)
+        self.events.append(dict(kind="archetype_change", tick=self.tick, faction=f.name, frm=old, to=cand, rule=rule))
