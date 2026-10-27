@@ -322,5 +322,15 @@ class Params:
     arc_clamp: bool = True                         # только для R106: клэмп арки до размера ведра
     arc_revert_ticks: int = 0                      # только для R108: откат keyword'ов именных через N тиков
 
+    # --- 09 хроника двойника (spec 09) ---
+    chronicle_people_drop: float = 0.20            # [предл] T2: падение Manpower за окно
+    chronicle_window: int = 10                     # [предл] окно T2, тиков
+    chronicle_candidates: bool = False             # [предл] кандидатные типы после G6
+    chronicle_bug_no_trace: bool = False           # только для R109: строка T3 без следа
+    chronicle_bug_mutate: bool = False             # только для R110: render() дописывает в журнал
+    chronicle_bug_numbers: bool = False            # только для R111: T1 печатает только числа
+    chronicle_bug_dup: bool = False                # только для R112: T1 по записи журнала (дубли)
+    chronicle_bug_unnorm: bool = False             # только для R113: слагаемые крепости не нормированы
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
