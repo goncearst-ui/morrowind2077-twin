@@ -42,3 +42,9 @@ for sc in sorted(EXTRA):
     print(f"{sc}: {'ЗЕЛЁНЫЙ' if ok else 'КРАСНЫЙ'}")
     for name, k, det in res:
         print(f"   {'OK ' if k else 'RED'} {name} — {det}")
+
+# задача 22: таблица флагов (spec 22 п. 3); файл перезаписывается
+from twin.integration import TABLE_PATH, render
+_table = render(Params())
+open(TABLE_PATH, "w", encoding="utf-8").write(_table)
+print(_table)

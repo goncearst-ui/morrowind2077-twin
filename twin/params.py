@@ -427,3 +427,10 @@ class Params:
 
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
+
+    # --- 22 мир «всё включено» (spec 22): только для обратных проверок R145–R149 ---
+    ig_bug_people: bool = False                    # только для R145: тайный прирост людей
+    ig_bug_nolog: bool = False                     # только для R146: поле меняется без строки журнала
+    ig_bug_table_skip: bool = False                # только для R147: таблица флагов пропускает один флаг
+    ig_bug_random: bool = False                    # только для R148: вызов случайности в прогоне
+    ig_bug_nocap: bool = False                     # только для R149: потолок активных целей снят
