@@ -3,6 +3,8 @@
 Spec: specs/21a-archetype-evolution.spec.md (утверждён 2026-10-27)
 Статус: утверждён 2026-10-27 (Стан: «По рекомендации. Пожалуйста внеси все правки и размести в git без дополнительных запросов и вопросов, полностью одобряю до следующего модуля»; тем же сообщением даны разрешения: копировать эталон tests/baseline_pre21a.json (около 3.5 МБ) и править tests/test_acceptance.py).
 
+Выполнено: 2026-10-27, отчёт reports/21a-report.md; 901 тест зелёный.
+
 ## Шаги
 1. Подготовка. Эталон журналов 70 прежних сценариев снят до правок кода: tests/baseline_pre21a.json (скопирован). Перечитан `step`, `hunger`, `assault`, `_war_end` в twin/model.py и docs/07, 06 (ShareShockK = 60), 00. Повторный поиск по модам — в spec §5.
 2. twin/params.py: `evolution_enabled` (False) и числа spec §1 с метками: `evo_r_full_days` 30, `evo_p_scale` 1.5, `evo_c_rest`, `evo_c_win` 10, `evo_c_desertion` 1.0, `evo_c_relax` 1.0, `evo_m_recover` 1.0, `evo_m_win` 5.0, `evo_m_max` 100, `evo_rule_order`, `evo_dwell` по правилам, `evo_dwell_scale` 1.0, `evo_cooldown` 7, `evo_hysteresis` True, пороги правил и выхода, `evo_share_shock_k` 60. Проверка: журналы 70 сценариев совпадают с эталоном.
