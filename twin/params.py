@@ -417,5 +417,13 @@ class Params:
     int_bug_repeat: bool = False                   # только для R134: повторный допрос проходит
     int_bug_scared_returns: bool = False           # только для R135: напуганный отпущенный возвращается
 
+    # --- 10 стенд сверки озвучки (spec 10): выключателя нет, модуль только читает мир ---
+    voice_template_version: str = "v1"             # [предл] версия шаблона промпта
+    voice_bug_facts: bool = False                  # только для R136: facts подменяет архетип
+    voice_bug_verify_pass: bool = False            # только для R137: verify всегда пропускает
+    voice_bug_leak_depot: bool = False             # только для R138: facts раскрывает чужой склад без знания
+    voice_bug_inject_write: bool = False           # только для R139: проверке LL8 подсовывается исходник с вызовом записи
+    voice_bug_inject_import: bool = False          # только для R140: проверке LL9 подсовывается исходник с импортом случайных чисел
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]
