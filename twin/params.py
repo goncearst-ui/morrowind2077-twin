@@ -257,5 +257,12 @@ class Params:
     dominant_ge: bool = False                      # только для R73: хозяин при доле ≥ порога
     share_inertia: float = 0.0                     # только для R74: доля ползёт к цели на эту долю разрыва за тик
 
+    # --- 15: реестр активов (spec 15) ---
+    asset_cap: int | None = None                   # потолок числа активов; None = нет [док 15: 4 на старте для игры; в двойнике параметр]
+    station_region: str = "orbit"                  # регион станции по умолчанию [предл]
+    asset_cap_ignored: bool = False                # только для R77: потолок не проверяется
+    registry_sort: bool = False                    # только для R76: индекс по сортировке имён, не по порядку списка
+    station_income_mult: float = 1.0               # только для R75: станция со своей логикой дохода
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

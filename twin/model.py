@@ -24,6 +24,7 @@ class Site:
     owner: str | None = None
     income_disabled: bool = False  # сценарий «потеря узла»
     region: str = "common"         # регион, где стоит объект (spec 03b)
+    kind: int = 0                  # 0 объект на планете, 1 станция [док 15, TF_Asset<N>_Type] (spec 15)
 
 
 @dataclass
@@ -143,7 +144,17 @@ class World:
     def prosperity(self) -> float:
         return self.regions["common"]
 
+    def registry(self):
+        """Spec 15: список (индекс, имя, тип, владелец) в порядке World.sites; индекс = позиция, не меняется при добавлении в конец."""
+        ss = sorted(self.sites, key=lambda s: s.name) if self.p.registry_sort else self.sites
+        return [(i, s.name, s.kind, s.owner) for i, s in enumerate(ss)]
+
     def __post_init__(self):
+        if self.p.asset_cap is not None and not self.p.asset_cap_ignored and len(self.sites) > self.p.asset_cap:
+            raise ValueError(f"активов {len(self.sites)} больше потолка {self.p.asset_cap} (spec 15)")
+        for s in self.sites:
+            if s.kind == 1 and s.region == "common":
+                s.region = self.p.station_region   # станция по умолчанию в регионе «orbit» (spec 15 §1.4)
         if not self.regions:
             self.regions = {"common": self.p.region_start}
         for name in [f.home for f in self.factions.values()] + [s.region for s in self.sites]:
@@ -485,6 +496,8 @@ class World:
             extra = max(0, min(left, cap - s.min_crew))
             left -= extra
             inc = s.yield_ + self.p.worker_yield * extra
+            if s.kind == 1:
+                inc *= self.p.station_income_mult
             if self.p.region_share_enabled and self.p.share_income_k and not self.p.share_income_ignored:
                 k = self.p.share_income_k
                 inc *= 1 - k + k * self.shares().get(s.region, {}).get(f.name, 0.0)   # spec 13a §1.4
