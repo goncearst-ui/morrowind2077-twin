@@ -264,5 +264,13 @@ class Params:
     registry_sort: bool = False                    # только для R76: индекс по сортировке имён, не по порядку списка
     station_income_mult: float = 1.0               # только для R75: станция со своей логикой дохода
 
+    # --- 14: хозяин планеты (spec 14) ---
+    planet_hegemon_enabled: bool = False           # False = статуса нет, журнал как до 14 [предл]
+    hegemon_margin: int = 1                        # запас по числу активов [док 14]
+    hegemon_cooldown: int = 7                      # тиков между сменами статуса [док 14: ~5–7]
+    hegemon_drop_deferred: bool = False            # только для R81: запрос смены в cooldown теряется
+    hegemon_stateless: bool = False                # только для R82: статус без памяти, каждый тик заново
+    hegemon_count_unowned: bool = False            # только для R83: бесхозные активы считаются «фракцией»
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

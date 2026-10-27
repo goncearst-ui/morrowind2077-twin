@@ -139,6 +139,9 @@ class World:
     persuade_last: dict = field(default_factory=dict)    # фракция -> тик последнего успешного убеждения
     share_pub: dict = field(default_factory=dict)        # (регион, фракция) -> последняя опубликованная доля (spec 13a)
     share_prev_owner: dict = field(default_factory=dict) # имя объекта -> владелец на конец прошлого тика (R71)
+    hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
+    hegemon_tick: int = 0                                # тик последней смены статуса
+    hegemon_last_cand: str | None = None                 # последний кандидат (только для R81)
 
     @property
     def prosperity(self) -> float:
@@ -460,6 +463,36 @@ class World:
                     self.rec(8, "13", f"region.{r}.share.{f}", old, new, "SHARE")
         self.share_prev_owner = {s.name: s.owner for s in self.sites}
 
+    # ---------- 14: хозяин планеты (spec 14) ----------
+    def _hegemon_candidate(self) -> str:
+        counts = {}
+        for _, _, _, owner in self.registry():
+            if owner is not None or self.p.hegemon_count_unowned:
+                counts[owner] = counts.get(owner, 0) + 1
+        if not counts:
+            return "Contested"
+        order = sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))
+        second = order[1][1] if len(order) > 1 else 0
+        top = order[0]
+        if top[1] - second >= self.p.hegemon_margin and (top[1] > second or self.p.hegemon_margin == 0):
+            return top[0] if top[0] is not None else "Contested"
+        return "Contested"
+
+    def _hegemon_step(self):
+        p, cand = self.p, self._hegemon_candidate()
+        old, apply = self.hegemon, False
+        if old is None:
+            apply = True
+        elif p.hegemon_stateless:
+            apply = cand != old
+        elif cand != old and self.tick - self.hegemon_tick >= p.hegemon_cooldown:
+            apply = not (p.hegemon_drop_deferred and cand == self.hegemon_last_cand)
+        self.hegemon_last_cand = cand
+        if apply and cand != old:
+            self.hegemon, self.hegemon_tick = cand, self.tick
+            self.rec(8, "14", "planet.hegemon", old if old is not None else "-", cand, "HEGEMON")
+            self.events.append(dict(tick=self.tick, kind="hegemon_change", old=old, new=cand))
+
     # ---------- 06: склад (spec 03b) ----------
     def best_depot(self, f: Faction, exclude: str | None = None) -> str:
         """Склад — на укомплектованном объекте с наибольшим доходом, при равенстве по имени;
@@ -596,6 +629,9 @@ class World:
         # фаза 8 — доли фракций в регионах (spec 13a): производная, ничего не меняет в других модулях
         if self.p.region_share_enabled:
             self._publish_shares()
+        # фаза 8 — хозяин планеты (spec 14): хранимый статус с запасом и паузой смены
+        if self.p.planet_hegemon_enabled:
+            self._hegemon_step()
 
     # ---------- 06 S3: налёт на регион ----------
     def raid(self, f: Faction):
