@@ -16,6 +16,7 @@
 2026-10-27: добавлены EV1–EV9, EV12–EV15 (список EV_SCENARIOS), EV10 и EV11 как отдельные тесты, обратные R39–R45 и регрессия «evolution_enabled = False» против tests/baseline_pre21a.json по утверждённому plan 21a, шаги 4–5 (решения Стана: полный 07 тремя задачами, оси R, P, C формулами [предл], у Дрейфующих нет отдельного условия выхода; утверждение блоком «по рекомендации … полностью одобряю до следующего модуля»; копирование эталона и правка tests/ разрешены). Прежние проверки не менялись.
 2026-10-27: добавлены EV16, EV17, критерий «X6 жива» в EV13, переписан EV7 (добавлена фракция C без объекта), обратные R46–R47 и тест значения по умолчанию по утверждённому plan 21a-2 (решения Стана: правило 7 для Дрейфующих только с объектом, территориальный шок, смена уклада включена по умолчанию; run() гонит прежние 70 сценариев с evolution_enabled = False, потому что 17 из них краснеют при включённой смене уклада). Критерии прежних сценариев не менялись.
 2026-10-27: добавлены EV18 и обратная R48 по утверждённому plan 21a-3 (решение Стана: вход в Хищники по правилу 5 требует сил для налёта). Прежние проверки не менялись.
+2026-10-27: добавлены EV20–EV27 (EV26, EV26b, EV26c), EV30, EV31, EV28 (журналы EV1–EV19 при выключенном вожаке против tests/baseline_pre21b.json), EV29 (люди сохраняются: общие тесты по списку EV_SCENARIOS), обратные R50–R54 по утверждённому plan 21b (Стан: «утверждаю 21b», правка tests/test_acceptance.py и новый эталон разрешены). Прежние проверки не менялись.
 2026-10-27: добавлены EV19 и обратная R49 по утверждённому plan 21a-4 (решение Стана: Хищники без объектов не изгоняют людей, а продолжают контрабанду). Прежние проверки не менялись."""
 import pytest
 
@@ -24,7 +25,8 @@ from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run, ev10, ev11
 
 SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e", "RB1", "RB2", "RB3", "RB4", "RB5", "SW1", "SW2")
-EV_SCENARIOS = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV12", "EV13", "EV14", "EV15", "EV16", "EV17", "EV18", "EV19")   # spec 21a, 21a-2, 21a-3, 21a-4; EV10 и EV11 — отдельные тесты
+EV_SCENARIOS = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV12", "EV13", "EV14", "EV15", "EV16", "EV17", "EV18", "EV19",
+                "EV20", "EV21", "EV22", "EV23", "EV24", "EV25", "EV26", "EV26b", "EV26c", "EV27", "EV30", "EV31")   # spec 21a, 21a-2, 21a-3, 21a-4, 21b; EV10 и EV11 — отдельные тесты
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -203,6 +205,32 @@ def test_evolution_off_matches_baseline(sc):
     base = json.loads((Path(__file__).parent / "baseline_pre21a.json").read_text(encoding="utf-8"))
     w, _ = run(sc)
     assert [list(r) for r in w.log] == base[sc]
+
+
+@pytest.mark.parametrize("sc", EV_SCENARIOS[:17])
+def test_leader_off_matches_baseline(sc):
+    """EV28 (spec 21b): с leader_enabled = False (по умолчанию) журналы EV1–EV19 совпадают строка в строку с эталоном, снятым до 21b."""
+    import json
+    from pathlib import Path
+    base = json.loads((Path(__file__).parent / "baseline_pre21b.json").read_text(encoding="utf-8"))
+    w, _ = run(sc)
+    assert not w.p.leader_enabled
+    assert [list(r) for r in w.log] == base[sc]
+
+
+def test_leader_off_by_default():
+    """spec 21b: вожак выключен по умолчанию, автономные убийства вожака выключены («заперт», как в enRAGE)."""
+    p = Params()
+    assert p.leader_enabled is False and p.leader_kill_seat is False and p.leader_kill_broken is False
+
+
+def test_leader_requires_evolution():
+    """spec 21b §1.6: leader_enabled без evolution_enabled — ошибка на первом тике."""
+    from dataclasses import replace
+    from twin.scenarios import build
+    w, _ = build("DS1", replace(Params(), leader_enabled=True, evolution_enabled=False))
+    with pytest.raises(ValueError):
+        w.step()
 
 
 def test_evolution_on_by_default():

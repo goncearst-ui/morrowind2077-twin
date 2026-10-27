@@ -56,7 +56,27 @@ SW_SCENARIOS = ("SW1", "SW2")
 EV_PIN = ("EV1", "EV2", "EV3", "EV4", "EV5", "EV6", "EV7", "EV8", "EV9", "EV18")   # spec 21a: оси задаёт подвязка сценария
 EV_WORLD = ("EV12", "EV13")                                                  # spec 21a: мир SW со сменой уклада
 EV_MECH = ("EV14", "EV15", "EV16", "EV17", "EV19")
-EV_SCENARIOS = EV_PIN + EV_WORLD + EV_MECH
+EV_OLD = EV_PIN + EV_WORLD + EV_MECH                                      # сценарии 21a: журналы при leader_enabled = False совпадают с tests/baseline_pre21b.json
+EV_LEADER = ("EV20", "EV21", "EV22", "EV23", "EV24", "EV25", "EV26", "EV26b", "EV26c", "EV27", "EV30", "EV31")   # spec 21b
+EV_SCENARIOS = EV_OLD + EV_LEADER
+
+
+def roster(fname, successors=(), officers=0, leader=True):
+    """Именные фракции (spec 21b): вожак, преемники по порядку (профили), офицеры."""
+    out = []
+    if leader:
+        out.append(dict(name=f"{fname}:вожак", role="вожак", profile="Основатель", alive=True))
+    for i, prof in enumerate(successors, 1):
+        out.append(dict(name=f"{fname}:преемник{i}", role="преемник", profile=prof, alive=True))
+    for i in range(1, officers + 1):
+        out.append(dict(name=f"{fname}:офицер{i}", role="офицер", profile="—", alive=True))
+    return out
+
+
+def give_named(w, fname, successors=(), officers=0):
+    f = w.factions[fname]
+    f.named = roster(fname, successors, officers)
+    f.leader = f"{fname}:вожак"
 
 
 def ev_pins(f_name, segs):
@@ -421,6 +441,72 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w = World(fs, ss, p)
         w.known_at_start = {n: tuple(x.name for x in ss if x.owner != n) for n, (a_, m_) in kinds.items() if a_ in ("Хищники", "Контролёры")}
         horizon = 500
+    elif sc in ("EV26", "EV26b", "EV26c"):
+        # spec 21b: обстановка войны WR7a (сломлены), WR7b (выдохлись), WR7c (цель достигнута); у A и B вожак и преемник
+        base = {"EV26": "WR7a", "EV26b": "WR7b", "EV26c": "WR7c"}[sc]
+        p = replace(p, evolution_enabled=True, leader_enabled=True, leader_kill_broken=True, evo_rule_order=(3, 5, 8))
+        w, horizon = build(base, p)
+        for n in ("A", "B"):
+            give_named(w, n, ("Радикальный",))
+        return w, horizon
+    elif sc in EV_LEADER:
+        # spec 21b: чистая обстановка, правила 6 и 7 вынуты из стека (оси не вмешиваются), голод и каналы выключены, оси растут и тают как обычно
+        p = replace(p, evolution_enabled=True, leader_enabled=True, hunger_threshold=0.0, underpay_morale=0.0, raids_enabled=False,
+                    object_raids_enabled=False, smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False,
+                    decisions_enabled=False, archetype_assault_threshold={}, evo_rule_order=(3, 5, 8))
+        horizon = 20
+        PV, NS = lambda n: Site(f"Перевал{n}", 40, 90, 4, owner=n), lambda n: Site(f"Насосная{n}", 15, 35, 2, owner=n)
+        if sc in ("EV20", "EV21", "EV22", "EV23", "EV31"):
+            arche = {"EV22": "Хищники"}.get(sc, "Хранители")
+            w = World({"A": faction(p, "A", arche, 30, 40, 10)}, [Site("Объект", 10, 0, 4, owner="A", income_disabled=True)], p)   # объект есть: иначе «зачистка базы» убила бы преемников
+            succ = {"EV21": ("Радикальный",), "EV22": ("Осторожный",), "EV23": ("Радикальный", "Осторожный")}.get(sc, ())
+            give_named(w, "A", succ, officers=2 if sc == "EV31" else 0)
+            if sc == "EV21":
+                def prime(w):
+                    f = w.factions["A"]
+                    f.cooldown, f.pending, f.pending_ticks = 5, "Контролёры", 2
+                w.scheduled = {9: [prime]}
+                w.player_script = {10: [("kill", "A", "A:вожак")]}
+            elif sc == "EV23":
+                w.player_script = {10: [("kill", "A", "A:вожак")], 30: [("kill", "A", "A:преемник1")], 50: [("kill", "A", "A:преемник2")]}
+                horizon = 60
+            elif sc == "EV31":
+                w.player_script = {10: [("kill", "A", "A:офицер1")], 12: [("kill", "A", "A:офицер1")]}
+            else:
+                w.player_script = {10: [("kill", "A", "A:вожак")]}
+        elif sc in ("EV24", "EV30"):
+            # A (Хищники 90) принудительно штурмует: тик 5 склад B, тик 6 не склад C, тик 7 объект D, склад которого в тайнике
+            p = replace(p, leader_kill_seat=(sc == "EV24"))
+            ss = [PV("B"), NS("B"), PV("C"), NS("C"), PV("D"), NS("D")]
+            fs = {"A": faction(p, "A", "Хищники", 90, 60, 0), "B": faction(p, "B", "Хранители", 30, 40, 55),
+                  "C": faction(p, "C", "Хранители", 30, 40, 55), "D": faction(p, "D", "Хранители", 30, 40, 55)}
+            w = World(fs, ss, p)
+            w.factions["D"].depot = "CACHE"
+            for n in "BCD":
+                give_named(w, n, ("Радикальный",))
+            w.forced_assaults = {5: [("A", "ПеревалB")], 6: [("A", "НасоснаяC")], 7: [("A", "ПеревалD")]}
+            if sc == "EV30":
+                w.player_script = {20: [("kill", "B", "B:вожак")]}
+                horizon = 25
+            else:
+                horizon = 12
+        elif sc == "EV25":
+            p = replace(p, leader_kill_seat=True)
+            fs = {"A": faction(p, "A", "Хищники", 90, 60, 0), "B": faction(p, "B", "Хранители", 30, 40, 40)}
+            w = World(fs, [PV("B")], p)
+            give_named(w, "B", ("Радикальный",))
+            w.forced_assaults = {5: [("A", "ПеревалB")]}
+            horizon = 12
+        elif sc == "EV27":
+            p = replace(p, leader_kill_seat=True)
+            fs = {"A": faction(p, "A", "Хранители", 30, 40, 55), "B": faction(p, "B", "Хищники", 90, 60, 0)}
+            w = World(fs, [PV("A"), NS("A")], p)
+            give_named(w, "A")
+            w.player_script = {10: [("kill", "A", "A:вожак")], 20: [("kill", "A", "A:вожак")]}
+            w.forced_assaults = {15: [("B", "ПеревалA")]}
+            horizon = 25
+        else:
+            raise ValueError(sc)
     elif sc == "EV19":
         # spec 21a-4: Хищники без объектов, голод, решения и контрабанда включены, остальное выключено
         p = replace(p, evolution_enabled=True, raids_enabled=False, object_raids_enabled=False, fees_enabled=False,
@@ -1100,6 +1186,68 @@ def check(sc: str, w: World, series):
                 sk[e["reason"]] = sk.get(e["reason"], 0) + 1
         res.append(("на тике 500 у каждой из 6 фракций людей больше нуля", all(v > 0 for v in alive.values()),
                     f"людей: {alive}; налётов на объекты {len(obj)}, штурмов {len([e for e in w.events if e['kind'] == 'assault'])}, войн {len([e for e in w.events if e['kind'] == 'war_declared'])}, пропусков {sk}"))
+    elif sc in EV_LEADER:
+        ch = [(e["tick"], e["faction"], e["frm"], e["to"], e["rule"]) for e in w.events if e["kind"] == "archetype_change"]
+        lk = [(e["tick"], e["faction"], e["reason"]) for e in w.events if e["kind"] == "leader_killed"]
+        sk = [e for e in w.events if e["kind"] == "player_skipped"]
+        def rows(target, reason=None):
+            return [r for r in w.log if r[3] == target and (reason is None or r[6] == reason)]
+        def ok_(name, cond, det):
+            res.append((name, bool(cond), det))
+        A = w.factions["A"]
+        if sc == "EV20":
+            ok_("на тике 11 Дрейфующие по правилу 1, других смен нет", ch == [(11, "A", "Хранители", "Дрейфующие", 1)], f"смены: {ch}")
+            ok_("вожака нет", A.leader is None, f"вожак: {A.leader}")
+            ok_("в журнале C -30 и M -10 на тике 11 (LEADER_LOST)", [(r[0], r[4], r[5]) for r in rows("A.ctl", "LEADER_LOST")] == [(11, 50.0, 20.0)] and [(r[0], r[4], r[5]) for r in rows("A.morale", "LEADER_LOST")] == [(11, 70.0, 60.0)],
+                f"C: {rows('A.ctl', 'LEADER_LOST')}; M: {rows('A.morale', 'LEADER_LOST')}")
+            ok_("людей столько же (30), Manpower гибелью вожака не менялся", A.manpower == 30, f"людей: {A.manpower}")
+        elif sc == "EV21":
+            cd = [r for r in rows("A.cooldown") if r[0] in (10, 11)]
+            ok_("к тику 10 пауза идёт (cooldown > 0)", any(r[0] == 10 and r[5] > 0 for r in cd), f"cooldown: {cd}")
+            ok_("правило 2: на тике 11 Хищники, пауза пробита", ch == [(11, "A", "Хранители", "Хищники", 2)], f"смены: {ch}")
+            ok_("pending сброшен на тике 11", [(r[0], r[4], r[5]) for r in rows("A.pending") if r[0] == 11] == [(11, "Контролёры", None)] and A.pending is None and A.pending_ticks == 0,
+                f"pending: {rows('A.pending')}; ticks: {rows('A.pending_ticks')}")
+            ok_("новая пауза 7 (RULE_2)", [(r[0], r[5]) for r in rows("A.cooldown", "RULE_2")] == [(11, 7)], f"cooldown: {rows('A.cooldown', 'RULE_2')}")
+        elif sc == "EV22":
+            ok_("Хищники → Хранители по правилу 2 на тике 11", ch == [(11, "A", "Хищники", "Хранители", 2)], f"смены: {ch}")
+            ok_("вожак — Осторожный преемник", A.leader == "A:преемник1", f"вожак: {A.leader}")
+        elif sc == "EV23":
+            ok_("Хищники, Хранители, затем Дрейфующие (тики 11, 31, 51)", ch == [(11, "A", "Хранители", "Хищники", 2), (31, "A", "Хищники", "Хранители", 2), (51, "A", "Хранители", "Дрейфующие", 1)], f"смены: {ch}")
+            ok_("вожаки по порядку: преемник1, преемник2, затем никого", [r[5] for r in rows("A.leader") if r[5] is not None] == ["A:преемник1", "A:преемник2"] and A.leader is None,
+                f"вожаки: {[r[5] for r in rows('A.leader')]}")
+        elif sc == "EV24":
+            ok_("убит только вожак B (склад), смена B на тике 6 по правилу 2", lk == [(5, "B", "LEADER_SEAT")] and ch == [(6, "B", "Хранители", "Хищники", 2)], f"гибели: {lk}; смены: {ch}")
+            ok_("штурм не склада (C) и склад в тайнике (D): вожаки живы, смен нет", w.factions["C"].leader == "C:вожак" and w.factions["D"].leader == "D:вожак",
+                f"C: {w.factions['C'].leader}, D: {w.factions['D'].leader}")
+            asl = [(e["tick"], e["defender"], e["attacker_wins"]) for e in w.events if e["kind"] == "assault"]
+            ok_("все три штурма состоялись и атакующий победил", asl == [(5, "B", True), (6, "C", True), (7, "D", True)], f"штурмы: {asl}")
+        elif sc == "EV25":
+            B = w.factions["B"]
+            ok_("зачистка базы: правило 1, а не 2", ch == [(6, "B", "Хранители", "Дрейфующие", 1)] and w.rule_hits == {1: 1}, f"смены: {ch}; правила: {w.rule_hits}")
+            ok_("преемник погиб вместе с вожаком", not any(n["alive"] for n in B.named), f"именные: {[(n['name'], n['alive']) for n in B.named]}")
+        elif sc in ("EV26", "EV26b", "EV26c"):
+            we = [(e["tick"], e["reason"]) for e in w.events if e["kind"] == "war_end"]
+            if sc == "EV26":
+                ok_("война закончилась «сломлены»", [x[1] for x in we] == ["WAR_END_BROKEN"], f"концы войн: {we}")
+                ok_("вожак проигравшего (B) убит, смена по правилу 2", len(lk) == 1 and lk[0][1:] == ("B", "LEADER_BROKEN") and (lk[0][0] + 1, "B") == (ch[0][0], ch[0][1]) and ch[0][4] == 2, f"гибели: {lk}; смены: {ch}")
+            else:
+                want = {"EV26b": "WAR_END_EXHAUSTED", "EV26c": "WAR_END_GOAL"}[sc]
+                ok_(f"война закончилась по причине {want}", [x[1] for x in we] == [want], f"концы войн: {we}")
+                ok_("вожаки обеих сторон живы", not lk and w.factions["A"].leader and w.factions["B"].leader, f"гибели: {lk}")
+        elif sc == "EV27":
+            ok_("правило 1 сработало ровно один раз", w.rule_hits.get(1) == 1 and len(lk) == 1, f"правила: {w.rule_hits}; гибели: {lk}")
+            ok_("второе убийство мёртвого вожака пропущено", len(sk) == 1, f"пропусков: {len(sk)}")
+            asl = [(e["tick"], e["defender"], e["attacker_wins"]) for e in w.events if e["kind"] == "assault"]
+            ok_("потеря склада Дрейфующими (штурм на тике 15) новых гибелей не создала", asl == [(15, "A", True)] and len(lk) == 1, f"штурмы: {asl}; гибели: {lk}")
+        elif sc == "EV30":
+            asl = [(e["tick"], e["defender"], e["attacker_wins"]) for e in w.events if e["kind"] == "assault"]
+            ok_("штурм склада B на тике 5 состоялся, вожак не убит (по умолчанию «заперт»)", (5, "B", True) in asl and not [x for x in lk if x[0] < 20], f"штурмы: {asl}; гибели: {lk}")
+            ok_("убил вожака только игрок (тик 20), смена B на тике 21", lk == [(20, "B", "LEADER_PLAYER")] and ch == [(21, "B", "Хранители", "Хищники", 2)], f"гибели: {lk}; смены: {ch}")
+        elif sc == "EV31":
+            off = [e for e in w.events if e["kind"] == "officer_killed"]
+            ok_("офицер убит: ярус офицеров 3 → 2", len(off) == 1 and A.off == 2, f"офицеров: {A.off}; события: {len(off)}")
+            ok_("вожак жив, уклад не менялся", A.leader == "A:вожак" and not ch, f"вожак: {A.leader}; смены: {ch}")
+            ok_("повторное убийство того же пропущено", len(sk) == 1, f"пропусков: {len(sk)}")
     elif sc in EV_SCENARIOS:
         ch = [e for e in w.events if e["kind"] == "archetype_change"]
         mine = lambda n: [(e["tick"], e["frm"], e["to"], e["rule"]) for e in ch if e["faction"] == n]
@@ -1286,4 +1434,9 @@ REVERSE = {
     "R48": (replace(Params(), evo_rule5_needs_force=False), ("EV18",), "вход в Хищники не требует сил для налёта"),
     "R47": (replace(Params(), evo_t_site=0.0), ("EV16",), "потеря объекта не даёт территориального шока"),
     "R45": (replace(Params(), evo_c_win=0.0), ("EV15",), "победа не поднимает C"),
+    "R50": (replace(Params(), succession_ignores_cooldown=False), ("EV21",), "ApplySuccession не пробивает паузу"),
+    "R51": (replace(Params(), succession_resets_pending=False), ("EV21",), "ApplySuccession не сбрасывает pending"),
+    "R52": (replace(Params(), leader_wipe_kills_successors=False), ("EV25",), "при зачистке базы преемник жив"),
+    "R53": (replace(Params(), leader_kill_any_war_end=True), ("EV26b", "EV26c"), "вожак гибнет при любом конце войны"),
+    "R54": (replace(Params(), leader_kill_any_site=True), ("EV24",), "штурм любого объекта убивает вожака"),
 }

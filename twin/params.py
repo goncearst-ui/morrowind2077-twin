@@ -199,5 +199,19 @@ class Params:
     evo_t_site: float = 25.0                       # tshock за потерянный объект (= shock_event_cap) [предл; решение Стана: территориальный шок вводим]
     evo_share_shock_k: float = 60.0                # [док 06] ShareShockK
 
+    # --- 21b: именные, вожак, преемник (docs 05, 07, 01) ---
+    leader_enabled: bool = False                   # False = журнал как до 21b; требует evolution_enabled [предл]
+    evo_c_leader_loss: float = 30.0                # C падает при гибели вожака [док 05 «Control падает»; число предл]
+    evo_m_leader_loss: float = 10.0                # M падает при гибели вожака [док 05; число предл]
+    succession_arch: dict = field(default_factory=lambda: {"Осторожный": "Хранители", "Радикальный": "Хищники"})   # профиль преемника -> уклад [док 05]; Идеолог — 21c
+    leader_kill_seat: bool = False                 # штурм склада убивает вожака защитника; по умолчанию вожак «заперт», как в enRAGE [предл]
+    leader_kill_broken: bool = False               # конец войны «сломлены» убивает вожака проигравшего [предл]
+    named_max: int = 10                            # именных на фракцию [док 01, 03: 5–10]
+    leader_wipe_kills_successors: bool = True      # нет объектов после гибели вожака: преемники погибают («зачистка базы») [док 05 риски]
+    succession_ignores_cooldown: bool = True       # ApplySuccession пробивает паузу [док 07, 05]
+    succession_resets_pending: bool = True         # и сбрасывает pending [док 07 S5]
+    leader_kill_any_war_end: bool = False          # только для обратной проверки R53: убивать при любом конце войны
+    leader_kill_any_site: bool = False             # только для обратной проверки R54: убивать при штурме любого объекта, не только склада
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

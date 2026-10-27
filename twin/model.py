@@ -56,6 +56,8 @@ class Faction:
     wounded_queue: list = field(default_factory=list)   # [тик возврата, ведро, число]
     captured: int = 0               # брошенные раненые, попавшие в плен (выбыли из фракции)
     absorbed: int = 0               # принятые пленные других фракций (прибавка к старту для сохранения людей)
+    named: list = field(default_factory=list)   # именные: dict(name, role, profile, alive) (spec 21b); пусто = вожака нет в модели
+    leader: str | None = None       # имя действующего вожака (spec 21b)
     rank: int = 0                   # ярусы (spec 04): рядовые, ветераны, офицеры; сумма = Manpower
     vet: int = 0
     off: int = 0
@@ -126,6 +128,8 @@ class World:
     raid_last: dict = field(default_factory=dict)        # (налётчик, объект) -> тик последнего налёта (spec 20)
     evo_cursor: int = 0                                  # сколько событий из events уже учтено осями C и M (spec 21a)
     rule_hits: dict = field(default_factory=dict)        # правило -> сколько раз оно сработало первым у живой фракции (spec 21a)
+    player_script: dict = field(default_factory=dict)    # tick -> [(действие, фракция, имя)]; вход сценария вместо игрока (spec 21b)
+    succ_queue: list = field(default_factory=list)       # фракции, у которых вожак погиб и преемственность ещё не применена (spec 21b)
 
     @property
     def prosperity(self) -> float:
@@ -467,6 +471,8 @@ class World:
             raise ValueError("raid_discipline_enabled требует knowledge_enabled (нужен мотив из 08c)")
         if self.p.war_steers_attacks and not self.p.wars_enabled:
             raise ValueError("war_steers_attacks требует wars_enabled (нужна цель войны из 08b)")
+        if self.p.leader_enabled and not self.p.evolution_enabled:
+            raise ValueError("leader_enabled требует evolution_enabled (нужны правила 1–2 стека 07)")
         for fn in self.scheduled.get(self.tick, []):
             fn(self)
         fs = list(self.factions.values())
@@ -504,6 +510,8 @@ class World:
         if self.p.evolution_enabled:
             self.evolution_step()
         # фаза 7 — решения
+        for act in self.player_script.get(self.tick, []):
+            self.player_action(act)
         for f in fs:
             self.surrender(f)
         for atk_name, site_name in self.forced_assaults.get(self.tick, []):
@@ -851,6 +859,7 @@ class World:
         sh = {}
         for f, k in ((lose, kl), (win, kw)):
             sh[f.name] = self.add_personnel_shock(f, k, mp_before[f.name], 1.0, 7, "ASSAULT")
+        seat = d.depot == s.name   # spec 21b: вожак сидит на складе
         # удар по складу (06): только при победе атакующего и только если на объекте стоял склад; до трофея
         if attacker_wins and d.depot == s.name:
             self.depot_strike(d, s)
@@ -862,6 +871,8 @@ class World:
         if attacker_wins:
             s.owner = a.name
             self.rec(7, "13", f"site.{s.name}.owner", d.name, a.name, "ASSAULT")
+            if self.p.leader_enabled and (self.p.leader_kill_seat or self.p.leader_kill_any_site) and (seat or self.p.leader_kill_any_site):
+                self.kill_named(d, self.leader_name(d), "LEADER_SEAT", 7)
         self.events.append(dict(
             tick=self.tick, kind="assault", forced=forced, attacker=a.name, defender=d.name,
             site=s.name, attacker_wins=attacker_wins, ratio=ratio,
@@ -1060,6 +1071,8 @@ class World:
                 self.setf(fw, "supply", fw.supply + amount, 8, "06", "REPARATIONS")
         self.events.append(dict(kind="war_end", tick=self.tick, initiator=a, victim=b, reason=reason, goal=self.wars[key]["goal"],
                                 winner=winner, loser=loser, reparations=amount))
+        if self.p.leader_enabled and loser and ((reason == "WAR_END_BROKEN" and self.p.leader_kill_broken) or self.p.leader_kill_any_war_end):
+            self.kill_named(self.factions[loser], self.leader_name(self.factions[loser]), "LEADER_BROKEN", 8)
         del self.wars[key]
         pair = tuple(sorted(key))
         until = self.tick + self.p.war_truce
@@ -1140,6 +1153,71 @@ class World:
                 self.events.append(dict(kind="war_declared", tick=self.tick, initiator=a, victim=b, goal=goal.name))
 
     # ---------- 21a: модуль 07, оси и стек правил ----------
+    # ---------- 21b: именные, вожак, преемник (docs 05, 07) ----------
+    def leader_name(self, f: Faction):
+        return f.leader
+
+    def player_action(self, act):
+        """Действие игрока из сценария (двойнику игрок нужен как вход). kill: убить именного. Нет цели или уже мёртв — пропуск в событиях."""
+        kind, fname, name = act
+        f = self.factions[fname]
+        if kind == "kill":
+            if not self.kill_named(f, name, "LEADER_PLAYER", 7):
+                self.events.append(dict(kind="player_skipped", tick=self.tick, faction=fname, name=name))
+
+    def kill_named(self, f: Faction, name, reason: str, phase: int) -> bool:
+        """Убить именного. Вожак: событие leader_killed (читает фаза 4 следующего тика). Офицер: ярус офицеров -1. Возвращает False, если цели нет или она мертва."""
+        n = next((x for x in f.named if x["name"] == name), None) if name else None
+        if n is None or not n["alive"]:
+            return False
+        n["alive"] = False
+        self.rec(phase, "05", f"{f.name}.named.{name}", 1, 0, reason)
+        if n["role"] == "вожак":
+            self.rec(phase, "05", f"{f.name}.leader", name, None, reason)
+            f.leader = None
+            self.events.append(dict(kind="leader_killed", tick=self.tick, faction=f.name, name=name, reason=reason))
+        elif n["role"] == "офицер":
+            self.kill_tier(f, 1, "off", phase, "KILL_NAMED")
+            self.events.append(dict(kind="officer_killed", tick=self.tick, faction=f.name, name=name, reason=reason))
+        return True
+
+    def _leader_lost(self, f: Faction):
+        """Чтение события гибели вожака: C и M падают, при отсутствии объектов преемники гибнут, преемственность в очередь."""
+        p = self.p
+        self.setf(f, "ctl", max(0.0, f.ctl - p.evo_c_leader_loss), 4, "05", "LEADER_LOST")
+        self.setf(f, "morale", max(0.0, f.morale - p.evo_m_leader_loss), 4, "05", "LEADER_LOST")
+        if p.leader_wipe_kills_successors and not self.owned(f):
+            for n in f.named:
+                if n["role"] == "преемник" and n["alive"]:
+                    n["alive"] = False
+                    self.rec(4, "05", f"{f.name}.named.{n['name']}", 1, 0, "BASE_WIPED")
+        if f.name not in self.succ_queue:
+            self.succ_queue.append(f.name)
+
+    def _apply_succession(self, f: Faction) -> bool:
+        """ApplySuccession (фаза 6): правило 1 или 2, мимо выдержки и паузы. True = стек для фракции в этот тик не вычисляется."""
+        p = self.p
+        if f.cooldown > 0 and not p.succession_ignores_cooldown:
+            return False   # обратная проверка R50: пауза не пробита, преемственность ждёт
+        self.succ_queue.remove(f.name)
+        succ = next((n for n in f.named if n["role"] == "преемник" and n["alive"]), None)
+        if succ is None:
+            cand, rule = "Дрейфующие", 1
+        else:
+            succ["role"] = "вожак"
+            f.leader = succ["name"]
+            self.rec(6, "05", f"{f.name}.leader", None, succ["name"], "RULE_2")
+            cand, rule = p.succession_arch[succ["profile"]], 2
+        self.rule_hits[rule] = self.rule_hits.get(rule, 0) + 1
+        keep = (f.pending, f.pending_ticks)
+        if p.succession_resets_pending:
+            self._pending(f, None, 0)
+        if cand != f.archetype:
+            self._switch(f, cand, rule)   # _switch сам сбрасывает pending
+            if not p.succession_resets_pending:
+                self._pending(f, *keep)   # только обратная проверка R51: ожидание не сброшено (видно в журнале)
+        return True
+
     def _evo_axes(self, f: Faction):
         """Фаза 4: оси R, P (производные) и C, M (события тика читаются на следующем тике, как в 08a)."""
         p = self.p
@@ -1163,6 +1241,8 @@ class World:
             elif e["kind"] == "war_end" and e.get("winner"):
                 f = self.factions[e["winner"]]
                 self.setf(f, "ctl", min(100.0, f.ctl + p.evo_c_win), 4, "07", "C_WIN")
+            elif e["kind"] == "leader_killed" and p.leader_enabled:
+                self._leader_lost(self.factions[e["faction"]])
             elif e["kind"] == "desertion":
                 f = self.factions[e["faction"]]
                 self.setf(f, "ctl", max(0.0, f.ctl - p.evo_c_desertion * e["n"]), 4, "07", "C_DESERTION")
@@ -1193,9 +1273,19 @@ class World:
             if f.days_supply >= p.hunger_threshold and p.evo_m_recover > 0 and f.morale < p.evo_m_max:
                 self.setf(f, "morale", min(p.evo_m_max, f.morale + p.evo_m_recover), 4, "07", "M_RECOVER")
             self._evo_axes(f)
+        # фаза 6 — ApplySuccession (spec 21b): правила 1–2 выше всех числовых, мимо выдержки и паузы
+        done = set()
+        for f in fs:
+            if f.name in self.succ_queue:
+                if f.manpower == 0:
+                    self.succ_queue.remove(f.name)
+                elif self._apply_succession(f):
+                    done.add(f.name)
         # фаза 5 — проверка правил; фаза 6 — применение
         for f in fs:
             if f.manpower == 0:
+                continue
+            if f.name in done:
                 continue
             if f.cooldown > 0:
                 self.setf(f, "cooldown", f.cooldown - 1, 5, "07", "COOLDOWN")
