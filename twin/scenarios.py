@@ -33,6 +33,7 @@ def faction(world_p, name, arche, n, dos, site_cost):
 
 
 # spec 08e: старые значения 08b закреплены в WR и WS, чтобы их критерии не менялись; подставляются, только если параметр равен новому значению по умолчанию
+RB_RUDNIK = 0.85  # доход «Рудника» A в RB как доля её расхода: запас A держится ниже 10 суток при налётах на свой регион (подбор обстановки, plan 20 шаг 4)
 OLD_WAR = dict(war_chance_base=4.0, war_chance_slope=3.0, war_chance_cap=15.0, war_truce=4, war_max_days=20,
                war_cost=5.0, war_cost_share_of_expense=False, war_reparation_share=0.0)
 
@@ -50,6 +51,8 @@ WE_BASE = {"WE1": "WR1", "WE2": "WR5", "WE3a": "WR7a", "WE3b": "WR7b", "WE3c": "
 _CH = ("war_chance_base", "war_chance_slope", "war_chance_cap")
 WE_PINS = {"WE1": (), "WE2": _CH, "WE3a": _CH, "WE3b": _CH, "WE3c": _CH, "WE3d": _CH + ("war_max_days",), "WE3e": _CH}
 WE_SCENARIOS = tuple(WE_BASE)
+RB_SCENARIOS = ("RB1", "RB2", "RB3", "RB4", "RB5")
+SW_SCENARIOS = ("SW1", "SW2")
 WR_SCENARIOS = ("WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d")
 
 
@@ -327,6 +330,29 @@ def build(sc: str, p: Params) -> tuple[World, int]:
                 w.forced_assaults = {25: [("C", "Перевал")]}
             if wsc == "WE1":
                 horizon = 101
+    elif sc in RB_SCENARIOS:
+        # spec 20: чистая обстановка; налёты на объекты автономные, штурмов нет; дисциплина налётов включает run() (для RB по умолчанию True)
+        p = replace(p, smuggling_enabled=False, fees_enabled=False, prisoner_sale_enabled=False, decisions_enabled=False,
+                    relations_enabled=True, knowledge_enabled=True, assault_dos=0.0)
+        a = faction(p, "A", "Хищники", 90, 60 if sc == "RB1" else 9.9, 0)
+        rudnik = Site("Рудник", 0, 90 * p.per_head_cost * p.archetype_cost_mult["Хищники"] * RB_RUDNIK, 1)
+        rudnik.owner = "A"
+        if sc == "RB5":
+            ss = [rudnik] + [Site(f"Пустошь-{k}", 10, 1, 1) for k in (1, 2, 3)]
+            for x in ss[1:]:
+                x.owner = "B"
+            b = faction(p, "B", "Хранители", 20, 0, 30)
+            b.supply = 100.0
+            p = replace(p, crew_cap={**p.crew_cap, **{f"Пустошь-{k}": 1 for k in (1, 2, 3)}})
+            horizon = 3
+        else:
+            ss = [rudnik] + sites()
+            ss[1].owner = "B"
+            b = faction(p, "B", "Хранители", 60, 60, 40)
+            horizon = {"RB4": 31}.get(sc, 30)
+        w = World({"A": a, "B": b}, ss, p)
+        if sc != "RB2":
+            w.known_at_start = {"A": tuple(x.name for x in ss if x.owner == "B")}
     elif sc in WS_SCENARIOS:
         # spec 08d: обстановка WR; до тика 20 автономные нападения выключены, на тике 20 сценарная команда их включает.
         # war_steers_attacks включает run() (для WS по умолчанию True); обратные проверки передают False явно.
@@ -352,17 +378,40 @@ def build(sc: str, p: Params) -> tuple[World, int]:
         w.known_at_start = {"A": known}
         w.scheduled = {20: [lambda w: setattr(w, "p", replace(w.p, **on))]}
         horizon = 21
+    elif sc in SW_SCENARIOS:
+        # spec 20: мир из 6 фракций и 18 объектов (по 3 на фракцию, 03b), 500 тиков, все переключатели 08a–08e и дисциплина налётов
+        names = ("X1", "X2", "X3", "X4", "X5", "X6")
+        kinds = {"X1": ("Хранители", 60), "X2": ("Хранители", 40), "X3": ("Хищники", 50), "X4": ("Хищники", 50),
+                 "X5": ("Контролёры", 40), "X6": ("Дрейфующие", 30)}
+        caps, ss = dict(p.crew_cap), []
+        for n in names:
+            for k, (bc, y, mc, cp) in enumerate(((40, 90, 4, 40), (15, 35, 2, 15), (20, 60, 3, 20))):
+                nm = f"{n}-{k + 1}"
+                caps[nm] = cp
+                x = Site(nm, bc, y, mc)
+                x.owner = n
+                ss.append(x)
+        p = replace(p, relations_enabled=True, knowledge_enabled=True, wars_enabled=True, crew_cap=caps)
+        dos = 20 if sc == "SW1" else 40
+        fs = {n: faction(p, n, a_, m_, dos, 75) for n, (a_, m_) in kinds.items()}
+        w = World(fs, ss, p)
+        w.known_at_start = {n: tuple(x.name for x in ss if x.owner != n) for n, (a_, m_) in kinds.items() if a_ in ("Хищники", "Контролёры")}
+        horizon = 500
     else:
         raise ValueError(sc)
     for f in w.factions.values():
         w.publish_dos(f, phase=0)
+    if sc in RB_SCENARIOS:
+        w.knowledge_step()   # обстановка RB: мотив считается до тика 1 (иначе он появился бы только после тика 1, мотив читается из прошлого тика)
     return w, horizon
 
 
 def run(sc: str, p: Params | None = None):
     if p is None:
         p = Params()
-        if sc in WS_SCENARIOS:
+        if sc in RB_SCENARIOS or sc in SW_SCENARIOS:
+            p = replace(p, raid_discipline_enabled=True)   # spec 20: по умолчанию сценарии RB и SW идут с дисциплиной налётов; обратные проверки передают False явно
+        if sc in SW_SCENARIOS or sc in WS_SCENARIOS:
             p = replace(p, war_steers_attacks=True)   # spec 08d: по умолчанию сценарии WS идут с управлением; обратные проверки передают False явно
     w, horizon = build(sc, p)
     series = {n: [(0, f.manpower)] for n, f in w.factions.items()}
@@ -928,6 +977,35 @@ def check(sc: str, w: World, series):
                 drop, gain = lr[0][4] - lr[0][5], wr[0][5] - wr[0][4]
                 res.append(("проигравший отдал 40% своего запаса", near(drop / lr[0][4], 0.40), f"отдано {drop:.2f} из {lr[0][4]:.2f}"))
                 res.append(("WE4: победитель получил ровно столько, сколько отдал проигравший", near(drop, gain, 0.01), f"отдано {drop:.4f}, получено {gain:.4f}"))
+    elif sc in RB_SCENARIOS:
+        obj = [e for e in w.events if e["kind"] == "raid_object"]
+        sk = [e for e in w.events if e["kind"] == "raid_skipped"]
+        reasons = {e["reason"] for e in sk}
+        if sc == "RB1":
+            res.append(("сытый не бьёт: налётов на объект нет", not obj, f"налётов {len(obj)}"))
+            res.append(("в events есть raid_skipped NO_MOTIVE", "NO_MOTIVE" in reasons, f"причины: {sorted(reasons)}"))
+        elif sc == "RB2":
+            res.append(("сценарий валиден: A нуждается", w.factions["A"].days_supply < p.hunger_threshold, f"запас A {w.factions['A'].days_supply:.1f} суток"))
+            res.append(("без знания налётов на объект нет", not obj, f"налётов {len(obj)}"))
+            res.append(("в events есть raid_skipped NO_MOTIVE", "NO_MOTIVE" in reasons, f"причины: {sorted(reasons)}"))
+        elif sc == "RB3":
+            res.append(("нуждающийся со знанием: первый налёт на тике 1", bool(obj) and obj[0]["tick"] == 1 and obj[0]["site"] == "Перевал", f"налёты: {[(e['tick'], e['site']) for e in obj]}"))
+        elif sc == "RB4":
+            on = [e["tick"] for e in obj if e["site"] == "Перевал"]
+            res.append(("налёты на тот же объект на тиках 1, 16, 31", on == [1, 16, 31], f"тики налётов: {on}"))
+            res.append(("между ними raid_skipped причины PAUSE", "PAUSE" in reasons, f"причины: {sorted(reasons)}"))
+        else:
+            res.append(("доля пула каждого объекта B ниже порога: налётов нет", not obj, f"налётов {len(obj)}"))
+            res.append(("в events есть raid_skipped PLUNDERED", "PLUNDERED" in reasons, f"причины: {sorted(reasons)}"))
+    elif sc in SW_SCENARIOS:
+        alive = {n: f.manpower for n, f in w.factions.items()}
+        obj = [e for e in w.events if e["kind"] == "raid_object"]
+        sk = {}
+        for e in w.events:
+            if e["kind"] == "raid_skipped":
+                sk[e["reason"]] = sk.get(e["reason"], 0) + 1
+        res.append(("на тике 500 у каждой из 6 фракций людей больше нуля", all(v > 0 for v in alive.values()),
+                    f"людей: {alive}; налётов на объекты {len(obj)}, штурмов {len([e for e in w.events if e['kind'] == 'assault'])}, войн {len([e for e in w.events if e['kind'] == 'war_declared'])}, пропусков {sk}"))
     return res, m
 
 
@@ -972,4 +1050,8 @@ REVERSE = {
     "R32": (replace(Params(), war_reparation_share=0.0), ("WE3a",), "репараций нет"),
     "R33": (replace(Params(), war_cost=0.0), ("WE2",), "война ничего не стоит (цена 0)"),
     "R34": (replace(Params(), war_chance_base=4.0, war_chance_slope=3.0, war_chance_cap=15.0), ("WE1",), "старый быстрый накопитель 4.0 / 3.0 / 15"),
+    "R35": (replace(Params(), raid_discipline_enabled=False), ("RB1",), "налёты без дисциплины (сытый бьёт)"),
+    "R36": (replace(Params(), raid_discipline_enabled=False), ("SW1",), "мир без дисциплины налётов (Дрейфующие вымирают)"),
+    "R37": (replace(Params(), raid_pause=0), ("RB4",), "пауза после налёта на ту же цель выключена"),
+    "R38": (replace(Params(), raid_min_loot_share=0.0), ("RB5",), "разграбленный объект тоже бьют"),
 }

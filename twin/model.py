@@ -114,6 +114,7 @@ class World:
     war_acc: dict = field(default_factory=dict)          # (зачинщик, цель) -> счётчик решимости
     truce: dict = field(default_factory=dict)            # (A, B) по алфавиту -> тик конца перемирия
     last_war_tick: int = -10**9
+    raid_last: dict = field(default_factory=dict)        # (налётчик, объект) -> тик последнего налёта (spec 20)
 
     @property
     def prosperity(self) -> float:
@@ -451,6 +452,8 @@ class World:
     # ---------- тик ----------
     def step(self):
         self.tick += 1
+        if self.p.raid_discipline_enabled and not self.p.knowledge_enabled:
+            raise ValueError("raid_discipline_enabled требует knowledge_enabled (нужен мотив из 08c)")
         if self.p.war_steers_attacks and not self.p.wars_enabled:
             raise ValueError("war_steers_attacks требует wars_enabled (нужна цель войны из 08b)")
         for fn in self.scheduled.get(self.tick, []):
@@ -516,13 +519,15 @@ class World:
             return
         if p.object_raids_enabled and f.last_assault != self.tick:
             goal = self._steer_goal(f)   # spec 08d: сначала цель войны
-            if goal is not None and self.visible_power(f) / max(1e-9, self.visible_power(self.factions[goal.owner]) * p.defense_factor) > p.raid_object_threshold:
+            if goal is not None and self._raid_skip(f, goal) is None and self.visible_power(f) / max(1e-9, self.visible_power(self.factions[goal.owner]) * p.defense_factor) > p.raid_object_threshold:
                 self._war_attack(f, goal, "raid")
                 self.raid_object(f, goal, forced=False)
                 return
             targets = [s for s in self.sites if s.owner not in (None, f.name) and self.factions[s.owner].manpower > 0]
             for s in sorted(targets, key=lambda s: (-s.yield_, s.name)):
                 d = self.factions[s.owner]
+                if self._raid_skip(f, s) is not None:
+                    continue
                 if self.visible_power(f) / max(1e-9, self.visible_power(d) * p.defense_factor) > p.raid_object_threshold:
                     self.raid_object(f, s, forced=False)
                     return
@@ -536,6 +541,27 @@ class World:
         self.events.append(dict(tick=self.tick, kind="raid", faction=f.name, loot=loot,
                                 to_pool=to_pool, manpower=f.manpower, party=min(f.manpower, p.strike_group_max)))
 
+    def _raid_skip(self, f: Faction, s: Site):
+        """Spec 20: причина, по которой автономный налёт f на объект s не идёт (NO_MOTIVE / PAUSE / PLUNDERED), иначе None.
+        Каждый пропуск пишется событием raid_skipped."""
+        p = self.p
+        if not p.raid_discipline_enabled:
+            return None
+        why = None
+        if (f.name, s.name) not in self.motive:
+            why = "NO_MOTIVE"
+        elif self.tick - self.raid_last.get((f.name, s.name), -10**9) < p.raid_pause:
+            why = "PAUSE"
+        else:
+            d = self.factions[s.owner]
+            weight = sum(x.yield_ for x in self.owned(d))
+            stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
+            if stock < p.raid_min_loot_share * p.strike_group_max * p.carry_unit:
+                why = "PLUNDERED"
+        if why:
+            self.events.append(dict(kind="raid_skipped", tick=self.tick, attacker=f.name, site=s.name, reason=why))
+        return why
+
     def raid_object(self, a: Faction, s: Site, forced: bool):
         """Spec 03c: налёт на объект. Бой как в штурме, но объект не захватывается; выбывшие частью ранены;
         ёмкость и мораль группы решают, что несут; брошенные раненые попадают в плен по укладу обороны."""
@@ -543,6 +569,7 @@ class World:
         d = self.factions[s.owner]
         if a.manpower == 0 or d is a:
             return
+        self.raid_last[(a.name, s.name)] = self.tick   # spec 20: любой налёт, и принудительный, запускает паузу
         a.last_raid = self.tick
         atk, dfn = self.power(a), self.power(d) * p.defense_factor
         attacker_wins = atk > dfn

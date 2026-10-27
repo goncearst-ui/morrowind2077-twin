@@ -11,14 +11,15 @@
 2026-10-26: добавлены MK1–MK6, обратные R19–R22, регрессия «knowledge_enabled = False» против tests/baseline_pre08c.json и проверка «модуль 08c только читает» по утверждённому plan 08c, шаги 6–7 (решения Стана: знание приходит слухом, держится до смены владельца, виды ресурсов не вводятся, мотив пока только считается; копирование эталона разрешено).
 2026-10-26: добавлены WR1–WR7d, обратные R23–R29, регрессия «wars_enabled = False» против tests/baseline_pre08b.json, проверки WR8 («война только цена») и WR9 (требования) по утверждённому plan 08b, шаги 6–7 (решения Стана: объявление по накопителю с мотивом, лимиты 1 в 3 суток и 2 на фракцию, цена 5 запаса в сутки; копирование эталона разрешено). В test_scenario_green добавлены RL, MK и WR.
 2026-10-26: добавлены WS1–WS3, обратные R30–R31, регрессия «war_steers_attacks = False» против tests/baseline_pre08d.json и проверка WS4 (требование) по утверждённому plan 08d, шаги 4–5 (решения Стана: война направляет выбор цели штурма и налёта, безнадёжная цель — бьёт других, защитник без изменений; копирование эталона разрешено).
-2026-10-26: добавлены WE1–WE3e (WE4 внутри WE3a–WE3c), обратные R32–R34 и регрессия против tests/baseline_pre08e.json (сценарии без войны с wars_enabled = False; WR и WS со старыми числами 08b, закреплёнными в обстановке) по утверждённому plan 08e, шаги 5–6 (решения Стана: накопитель 0.5 / 1.0 / 8, перемирие 15, цена 25% расхода, репарации 40% запаса проигравшего, срок 40; копирование эталона разрешено)."""
+2026-10-26: добавлены WE1–WE3e (WE4 внутри WE3a–WE3c), обратные R32–R34 и регрессия против tests/baseline_pre08e.json (сценарии без войны с wars_enabled = False; WR и WS со старыми числами 08b, закреплёнными в обстановке) по утверждённому plan 08e, шаги 5–6 (решения Стана: накопитель 0.5 / 1.0 / 8, перемирие 15, цена 25% расхода, репарации 40% запаса проигравшего, срок 40; копирование эталона разрешено).
+2026-10-27: добавлены RB1–RB5, SW1, SW2, обратные R35–R38, регрессия «raid_discipline_enabled = False» против tests/baseline_pre20.json и проверка RB6 (требование) по утверждённому plan 20, шаги 4–5 (решения Стана: налёт по нужде, пауза после налёта на ту же цель 15 суток, нет налёта на разграбленный объект; копирование эталона разрешено)."""
 import pytest
 
 from twin.model import Faction
 from twin.params import Params
 from twin.scenarios import REVERSE, evaluate, run
 
-SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e")
+SCENARIOS = ("DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e", "RB1", "RB2", "RB3", "RB4", "RB5", "SW1", "SW2")
 
 
 KNOWN_DEFECT = pytest.mark.xfail(
@@ -28,7 +29,7 @@ KNOWN_DEFECT = pytest.mark.xfail(
            "Когда DS4 станет зелёным, strict=True уронит прогон — снять пометку.")
 
 
-@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e"])
+@pytest.mark.parametrize("sc", ["DS1", "DS2", "DS4", "RG1", "RG2", "RG3", "RG4", "RG5", "OB1", "OB2", "RG6", "HD1", "HD2", "HD3", "IC1", "IC2", "IC3", "IC5", "RD1", "RD2", "RD3", "RD3S", "RD4", "RP1", "RP2", "RT1", "RT2", "RT2b", "RT3", "RT4", "RL1", "RL2", "RL3", "RL4a", "RL4b", "RL5", "RL6", "MK1", "MK2", "MK3", "MK4", "MK5", "MK6", "WR1", "WR2", "WR3", "WR4", "WR5", "WR6", "WR7a", "WR7b", "WR7c", "WR7d", "WS1", "WS2", "WS3", "WE1", "WE2", "WE3a", "WE3b", "WE3c", "WE3d", "WE3e", "RB1", "RB2", "RB3", "RB4", "RB5", "SW1", "SW2"])
 def test_scenario_green(sc):
     ok, res, *_ = evaluate(sc)
     red = [f"{n}: {d}" for n, k, d in res if not k]
@@ -94,7 +95,7 @@ def test_gear_step_by_tier():
     assert [w.gear_step(f, t) for t in ("rank", "vet", "off")] == ["Rags", "Rags", "Worn"]
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("RL", "MK", "WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("RL", "MK", "WR", "WS", "WE", "RB", "SW"))])
 def test_relations_off_matches_baseline(sc):
     """spec 08a, флаг: с relations_enabled = False журнал совпадает строка в строку с эталоном, снятым до 08a."""
     import json
@@ -105,7 +106,7 @@ def test_relations_off_matches_baseline(sc):
     assert [list(r) for r in w.log] == base[sc]
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("RL", "WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("RL", "WR", "WS", "WE", "RB", "SW"))])
 def test_relations_read_only(sc):
     """spec 08a: при relations_enabled = True журнал без строк модуля 08 совпадает с журналом при False (модуль только читает)."""
     from dataclasses import replace
@@ -114,7 +115,7 @@ def test_relations_read_only(sc):
     assert [r for r in on.log if r[2] != "08"] == off.log
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("MK", "WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("MK", "WR", "WS", "WE", "RB", "SW"))])
 def test_knowledge_off_matches_baseline(sc):
     """spec 08c, флаг: с knowledge_enabled = False журнал совпадает строка в строку с эталоном, снятым до 08c."""
     import json
@@ -126,7 +127,7 @@ def test_knowledge_off_matches_baseline(sc):
 
 
 @pytest.mark.parametrize("rel", [False, True])
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("MK", "WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("MK", "WR", "WS", "WE", "RB", "SW"))])
 def test_knowledge_read_only(sc, rel):
     """spec 08c: при knowledge_enabled = True журнал без строк модуля 08c совпадает с журналом при False, при выключенных и включённых отношениях."""
     from dataclasses import replace
@@ -135,7 +136,7 @@ def test_knowledge_read_only(sc, rel):
     assert [r for r in on.log if r[2] != "08c"] == off.log
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WR", "WS", "WE", "RB", "SW"))])
 def test_wars_off_matches_baseline(sc):
     """spec 08b, флаг: с wars_enabled = False журнал совпадает строка в строку с эталоном, снятым до 08b."""
     import json
@@ -146,7 +147,7 @@ def test_wars_off_matches_baseline(sc):
     assert [list(r) for r in w.log] == base[sc]
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WR", "WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WR", "WS", "WE", "RB", "SW"))])
 def test_wars_read_only(sc):
     """WR8: при wars_enabled = True и war_cost = 0 журнал без строк модуля 08b совпадает с журналом при False (отношения и знание включены в обоих прогонах)."""
     from dataclasses import replace
@@ -156,7 +157,7 @@ def test_wars_read_only(sc):
     assert [r for r in on.log if r[2] != "08b"] == off.log
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WS", "WE"))])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WS", "WE", "RB", "SW"))])
 def test_steers_off_matches_baseline(sc):
     """spec 08d, флаг: с war_steers_attacks = False журнал совпадает строка в строку с эталоном, снятым до 08d."""
     import json
@@ -167,7 +168,7 @@ def test_steers_off_matches_baseline(sc):
     assert [list(r) for r in w.log] == base[sc]
 
 
-@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith("WE")])
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("WE", "RB", "SW"))])
 def test_war_economy_matches_baseline(sc):
     """spec 08e: журналы всех прежних сценариев совпадают с эталоном до 08e строка в строку: сценарии без войны (wars_enabled = False) и WR, WS со старыми числами 08b, закреплёнными в обстановке."""
     import json
@@ -176,6 +177,26 @@ def test_war_economy_matches_baseline(sc):
     base = json.loads((Path(__file__).parent / "baseline_pre08e.json").read_text(encoding="utf-8"))
     w, _ = run(sc) if sc.startswith(("WR", "WS")) else run(sc, replace(Params(), wars_enabled=False))
     assert [list(r) for r in w.log] == base[sc]
+
+
+@pytest.mark.parametrize("sc", [x for x in SCENARIOS if not x.startswith(("RB", "SW"))])
+def test_raid_discipline_off_matches_baseline(sc):
+    """spec 20, флаг: с raid_discipline_enabled = False журнал совпадает строка в строку с эталоном, снятым до задачи 20 (WR, WS, WE идут со своими числами по умолчанию)."""
+    import json
+    from dataclasses import replace
+    from pathlib import Path
+    base = json.loads((Path(__file__).parent / "baseline_pre20.json").read_text(encoding="utf-8"))
+    w, _ = run(sc) if sc.startswith(("WR", "WS", "WE")) else run(sc, replace(Params(), raid_discipline_enabled=False))
+    assert [list(r) for r in w.log] == base[sc]
+
+
+def test_raid_discipline_requires_knowledge():
+    """RB6: raid_discipline_enabled без knowledge_enabled — ошибка на первом тике."""
+    from dataclasses import replace
+    from twin.scenarios import build
+    w, _ = build("DS1", replace(Params(), raid_discipline_enabled=True, knowledge_enabled=False))
+    with pytest.raises(ValueError):
+        w.step()
 
 
 def test_steers_requires_wars():
