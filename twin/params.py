@@ -396,5 +396,26 @@ class Params:
     tri_bug_vassal_h: bool = False                 # только для R143: флаг вассальной труа меняет уровни отношений
     tri_bug_same_leaders: bool = False             # только для R144: лидеры совпадают по трейтам
 
+    # --- 19 допрос (spec 19; двойник, Creation Kit не описывает) ---
+    interrogation_enabled: bool = False            # требует npc_state_enabled
+    talk_threshold: float = 60.0                   # [док 19] страх, с которого пленный вообще говорит
+    step_pressure: float = 10.0                    # [предл] страх за единицу давления
+    morale_k: float = 0.2                          # [предл] страх за каждое очко потери морали фракции
+    trap_losses: int = 3                           # [док 19] потери нападающего на ловушке
+    max_traps: int = 3                             # [док 19] ловушек на мир
+    purge_shock: float = 1.0                       # [предл] шок подозрения при возвращении ненапуганного
+    lie_fear_cap: float = 80.0                     # [предл] Вспыльчивый лжёт при страхе ниже, говорит правду с этого значения
+    stubborn_morale: float = 20.0                  # [док 19] Упёртый говорит, если мораль фракции ниже
+    interrogation_base: dict = field(default_factory=lambda: {   # [док 19] база страха по ярлыку темперамента
+        "Пугливый": 50.0, "Вспыльчивый": 20.0, "Бродяга": 30.0, "Хладнокровный": 10.0, "Упёртый": 0.0, "": 30.0})
+    interrogation_bucket_label: dict = field(default_factory=lambda: {   # [предл] ведро → ярлык
+        "skittish": "Пугливый", "ordinary": "", "steady": "Упёртый"})
+    int_bug_no_trap_cost: bool = False             # только для R130: ловушка не стоит бойцов
+    int_bug_lie_knowledge: bool = False            # только для R131: ложь ставит знание
+    int_bug_stubborn_talks: bool = False           # только для R132: Упёртый говорит при высокой морали
+    int_bug_uncounted: bool = False                # только для R133: пленный не учитывается в сумме людей
+    int_bug_repeat: bool = False                   # только для R134: повторный допрос проходит
+    int_bug_scared_returns: bool = False           # только для R135: напуганный отпущенный возвращается
+
     # --- метрики ---
     critical_manpower: int = 4                     # MinCrew перевала [предл]

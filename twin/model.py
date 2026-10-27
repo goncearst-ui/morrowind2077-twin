@@ -10,7 +10,7 @@ from .params import Params
 from . import evolution as evo
 
 BUCKETS_ALIVE = ("steady", "ordinary", "skittish")
-BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold", "captured")  # куда уходят люди; сумма с живыми = старт (§1)
+BUCKETS_OUT = ("dead", "deserted", "expelled", "detained", "sold", "captured", "held")  # куда уходят люди; сумма с живыми = старт (§1)
 TIERS = ("rank", "vet", "off")  # ярусы 04: рядовые, ветераны, офицеры; порядок везде один
 CACHE = "cache"  # тайник: ничейное место, куда уходит склад фракции без объектов (spec 03b)
 
@@ -79,6 +79,7 @@ class Faction:
     obj_rival_start: int = 0        # Manpower соперника при установке цели
     obj_rival_depot: str | None = None   # депо соперника при установке цели (для OBJ_TARGET_LEFT)
     obj_start: dict = field(default_factory=dict)    # свои числа при установке: mp, ctl
+    held: int = 0                   # ведро «в плену у игрока» (spec 19): люди учтены, не воюют и не едят
     vendetta: int = 0               # осталось суток вендетты (spec 16c)
     vendetta_culprit: str | None = None   # виновник: фракция или "player"
     strategy_txt: str = "1/0/1"      # последний записанный вектор стратегии (spec 16b), нейтральный по умолчанию
@@ -134,6 +135,9 @@ class World:
     rel_cursor: int = 0                                  # сколько событий из events уже учтено фазой 8
     known_at_start: dict = field(default_factory=dict)   # фракция -> (объекты, чьего владельца она знает со старта) (spec 08c)
     know: dict = field(default_factory=dict)             # (фракция, объект) -> владелец по её сведениям (spec 08c)
+    prisoners: dict = field(default_factory=dict)        # id -> запись пленного (spec 19)
+    prison_seq: int = 0
+    traps: dict = field(default_factory=dict)            # объект -> фракция, которой готовят засаду (spec 19)
     rumors: list = field(default_factory=list)           # слухи в пути: dict(site, owner, born, due, key) (spec 08c)
     motive: set = field(default_factory=set)             # пары (фракция, объект) с мотивом (spec 08c)
     know_cursor: int = 0
@@ -837,6 +841,8 @@ class World:
         for fn in self.scheduled.get(self.tick, []):
             fn(self)
         fs = list(self.factions.values())
+        if self.p.interrogation_enabled and not self.p.npc_state_enabled:
+            raise ValueError("interrogation_enabled требует npc_state_enabled (spec 19)")
         # фаза 1 — затухание шока, восстановление региона
         if self.p.inheritance_enabled:
             if not (self.p.obj_enabled and self.p.strategy_enabled):
@@ -1243,6 +1249,10 @@ class World:
         p = self.p
         d = self.factions[s.owner]
         a.last_assault = self.tick
+        if p.interrogation_enabled and self.traps.get(s.name) == a.name:   # spec 19 п. 5: засада по названной площадке
+            self.rec(7, "19", f"trap.{s.name}", a.name, None, "INTERROGATE_TRAP")
+            del self.traps[s.name]
+            self.kill_many(a, 0 if p.int_bug_no_trap_cost else p.trap_losses, 7, "INTERROGATE_TRAP")
         atk, dfn = self.power(a), self.power(d) * p.defense_factor
         attacker_wins = atk > dfn
         win, lose = (a, d) if attacker_wins else (d, a)
@@ -1584,6 +1594,9 @@ class World:
     def player_action(self, act):
         """Действие игрока из сценария (двойнику игрок нужен как вход).
         kill (фракция, имя); bribe (A, B, сумма); tip (A, объект); persuade (T, O). Отказ — событие player_failed с кодом, состояние не меняется."""
+        if isinstance(act, dict):
+            from . import interrogation as I
+            return I.act(self, act)
         kind = act[0]
         if kind == "kill":
             _, fname, name, *rest = act
