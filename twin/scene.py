@@ -322,6 +322,12 @@ def _result(w, site, out):
     # 7. цена победы: сторона игрока победила
     if side is not None and side == winner and not p.sc_bug_no_cost:
         _cost(w, s, a, d, side, known, masked, wit, strike_site_taken=takes and a is None)
+    elif side is not None and side != winner and not p.sc_bug_no_loss_enmity:
+        # 8. поражение стороны игрока (spec 24a-2): вражда, если игрок убил людей противника (потери по ведрам или именной); объекта и возврата нет
+        if win is not None:
+            o_named = fsum(1 for it in out.get("named_dead", ()) if it[0] == win.name)
+            if kw + o_named > 0:
+                _enmity(w, win, known, masked, wit)
     _close(w, site, "result")
 
 
@@ -335,6 +341,12 @@ def _cost(w, s, a, d, side, known, masked, wit, strike_site_taken):
         w.rec(PHASE, "24", f"scene.return.{s.name}", None, due, "SCENE_RETURN_SET")
     if o is None:
         return
+    _enmity(w, o, known, masked, wit)
+
+
+def _enmity(w, o, known, masked, wit):
+    """Вражда игрока к противнику o (spec 24a §1.4 п.4–5; при поражении стороны игрока spec 24a-2): слух по 02 и вендетта без продления."""
+    p = w.p
     w._rep_kill(o.name, "scene", {"masked": masked, "witnesses": wit})
     if known and o.manpower > 0 and (o.vendetta == 0 or p.sc_bug_extend_vendetta):
         w.rec(PHASE, "24", f"{o.name}.vendetta", o.vendetta, p.vendetta_max, "SCENE_VENDETTA")
