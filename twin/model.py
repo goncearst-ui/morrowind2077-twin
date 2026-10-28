@@ -184,6 +184,9 @@ class World:
     quiet_fac: dict = field(default_factory=dict)        # (планета, фракция) -> доход тихих объектов за тик (только текущий тик)
     hegemon_p: dict = field(default_factory=dict)        # планета -> [хозяин, тик смены, последний кандидат] (spec 14 по планетам, 23c)
     log_sum: dict = field(default_factory=dict)          # сводный журнал (spec 23a): (начало окна, модуль, класс цели, причина, планета) -> [число, сумма разностей, число нечисловых]
+    scene_presence: str | None = None                    # объект, у которого сейчас игрок (spec 24a); None = нигде
+    scenes: dict = field(default_factory=dict)           # объект -> открытая сцена (spec 24a): расстановка и бюджеты
+    scene_returns: list = field(default_factory=list)    # [срок, объект, прежний владелец]: «ничьи» объекты после нападения игрока (spec 24a)
 
     @property
     def prosperity(self) -> float:
@@ -1026,6 +1029,8 @@ class World:
             raise ValueError("war_steers_attacks требует wars_enabled (нужна цель войны из 08b)")
         if self.p.leader_enabled and not self.p.evolution_enabled:
             raise ValueError("leader_enabled требует evolution_enabled (нужны правила 1–2 стека 07)")
+        if self.p.scene_enabled and not (self.p.reputation_enabled and self.p.inheritance_enabled):
+            raise ValueError("scene_enabled требует reputation_enabled и inheritance_enabled (spec 24a)")
         for fn in self.scheduled.get(self.tick, []):
             fn(self)
         fs = list(self.factions.values())
@@ -1100,6 +1105,9 @@ class World:
             self._strategy_step()
         for act in self.player_script.get(self.tick, []):
             self.player_action(act)
+        if self.p.scene_enabled:   # spec 24a §1.8: таймауты сцен и возвраты «ничьих» объектов после действий игрока
+            from . import scene
+            scene.step(self)
         for f in fs:
             self.surrender(f)
         for atk_name, site_name in self.forced_assaults.get(self.tick, []):
@@ -1120,6 +1128,9 @@ class World:
         if self.p.wars_enabled:
             self.war_step()
         # фаза 8 — планеты: переходы активная/тихая и пакетный пересчёт тихих (spec 23c)
+        if self.p.scene_enabled:   # spec 24a §1.6: пока игрок у объекта, планета активна
+            from . import scene
+            scene.keep_active(self)
         if self.p.multi_planet_enabled:
             self._planet_step()
         # фаза 8 — доли фракций в регионах (spec 13a): производная, ничего не меняет в других модулях
@@ -1449,6 +1460,9 @@ class World:
 
     # ---------- 13: разрешение штурма ----------
     def assault(self, a: Faction, s: Site, forced: bool):
+        if self.p.scene_enabled and s.name in self.scenes:   # spec 24a §1.2: на объекте открыта сцена, другой штурм откладывается
+            self.events.append(dict(tick=self.tick, kind="assault_deferred", attacker=a.name, site=s.name))
+            return
         self._touch_site(s)
         p = self.p
         d = self.factions[s.owner]
@@ -1457,6 +1471,14 @@ class World:
             self.rec(7, "19", f"trap.{s.name}", a.name, None, "INTERROGATE_TRAP")
             del self.traps[s.name]
             self.kill_many(a, 0 if p.int_bug_no_trap_cost else p.trap_losses, 7, "INTERROGATE_TRAP")
+        if p.scene_enabled and self.scene_presence == s.name and len(self.scenes) < p.scene_open_max:   # spec 24a §1.2: игрок рядом, штурм играется как сцена
+            from . import scene
+            return scene.open_assault(self, a, s, d, forced)
+        return self._assault_resolve(a, s, d, forced)
+
+    def _assault_resolve(self, a: Faction, s: Site, d: Faction, forced: bool):
+        """Числовое разрешение штурма (13): тело прежнего assault() после преамбулы; формулы не менялись (spec 24a)."""
+        p = self.p
         atk, dfn = self.power(a), self.power(d) * p.defense_factor
         attacker_wins = atk > dfn
         win, lose = (a, d) if attacker_wins else (d, a)
@@ -1802,6 +1824,9 @@ class World:
             from . import interrogation as I
             return I.act(self, act)
         kind = act[0]
+        if kind in ("presence", "scene_open", "scene_result", "scene_leave"):
+            from . import scene
+            return scene.act(self, act)
         if kind == "kill":
             _, fname, name, *rest = act
             if rest and not self.p.reputation_enabled:
