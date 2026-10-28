@@ -434,3 +434,16 @@ class Params:
     ig_bug_table_skip: bool = False                # только для R147: таблица флагов пропускает один флаг
     ig_bug_random: bool = False                    # только для R148: вызов случайности в прогоне
     ig_bug_nocap: bool = False                     # только для R149: потолок активных целей снят
+
+    # --- 23a журнал в два уровня (spec 23; двойник, Creation Kit не описывает) ---
+    log_two_level_enabled: bool = False            # False = плоский журнал, как до 23a [решение Стана 2026-10-28: два уровня]
+    log_sum_window: int = 10                       # окно сводного уровня, тиков [предл]
+    disputed_reasons: tuple = (                    # [предл] причины «спорных событий»: подробный уровень
+        "ASSAULT", "RAID", "RAID_OBJECT", "TROPHY", "CAPTURE", "RELEASE", "RELEASED_SUSPECT", "INTERROGATE", "INTERROGATE_TRAP",
+        "KILL_NAMED", "LEADER_LOST", "LEADER_PLAYER", "NO_LEADER", "ARCH_CHANGE", "WAR_DECLARED", "TRUCE", "TRUCE_END", "REPARATIONS",
+        "HEGEMON", "DEPOT_STRIKE", "DEPOT_MOVE", "SURRENDER", "ABANDON", "BRIBE_DEBT", "TERRITORIAL", "STRATEGY", "PRISONER_SALE", "ENVOY_INIT")
+    disputed_prefixes: tuple = ("RULE_", "KR_", "WAR_END_", "PLAYER_", "VENDETTA", "OBJ_")   # [предл] семейства причин спорных событий
+    disputed_target_suffixes: tuple = (".leader", ".archetype", ".owner", ".objective", ".obj_stage")   # [предл] цели, чья смена всегда спорная
+    lg_bug_named_summary: bool = False             # только для R150: строки именных уходят в сводный уровень
+    lg_bug_drop_sum: bool = False                  # только для R151: сводная запись теряется
+    lg_bug_affects_world: bool = False             # только для R152: сводная запись меняет состояние мира

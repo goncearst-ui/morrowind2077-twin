@@ -19,9 +19,12 @@ REQ = {"leader_enabled": ("evolution_enabled",), "npc_state_enabled": ("leader_e
 SCALAR = (int, float, str, type(None))
 
 
+NOT_IN_WORLD22 = ("log_two_level_enabled", "multi_planet_enabled")   # spec 23: меняют формат журнала и устройство мира, а не поведение 4-фракционного мира задачи 22; проверяются своими сценариями LG и MP
+
+
 def flags():
-    """Все булевы поля Params с именем *_enabled (по шаблону spec 22 п. 1) в порядке объявления."""
-    return [f.name for f in dataclasses.fields(Params) if f.name.endswith("_enabled") and isinstance(f.default, bool)]
+    """Все булевы поля Params с именем *_enabled (по шаблону spec 22 п. 1) в порядке объявления, кроме флагов масштаба (NOT_IN_WORLD22)."""
+    return [f.name for f in dataclasses.fields(Params) if f.name.endswith("_enabled") and isinstance(f.default, bool) and f.name not in NOT_IN_WORLD22]
 
 
 def all_on(p, off=(), **kw):

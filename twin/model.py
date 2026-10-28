@@ -167,6 +167,7 @@ class World:
     hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
     hegemon_tick: int = 0                                # тик последней смены статуса
     hegemon_last_cand: str | None = None                 # последний кандидат (только для R81)
+    log_sum: dict = field(default_factory=dict)          # сводный журнал (spec 23a): (начало окна, модуль, класс цели, причина, планета) -> [число, сумма разностей, число нечисловых]
 
     @property
     def prosperity(self) -> float:
@@ -203,9 +204,59 @@ class World:
     def rec(self, phase, module, target, old, new, reason):
         if old == new:
             return
-        self.log.append((self.tick, phase, module, target,
-                         round(old, 4) if isinstance(old, float) else old,
-                         round(new, 4) if isinstance(new, float) else new, reason))
+        row = (self.tick, phase, module, target,
+               round(old, 4) if isinstance(old, float) else old,
+               round(new, 4) if isinstance(new, float) else new, reason)
+        if self.p.log_two_level_enabled and not self.is_detail(target, reason):
+            self._sum_row(row)
+            return
+        self.log.append(row)
+
+    # ---------- 23a: два уровня журнала (spec 23) ----------
+    def is_detail(self, target, reason):
+        """Подробный уровень: любые именные, спорные причины и цели [предл, spec 23 §1.23a]. Всё остальное идёт в сводный."""
+        p = self.p
+        if p.lg_bug_named_summary:
+            named = False                                       # R150: именные не защищены
+        else:
+            named = ".named." in target
+        return (named or reason in p.disputed_reasons or reason.startswith(p.disputed_prefixes)
+                or target.endswith(p.disputed_target_suffixes) or "hegemon" in target)
+
+    def target_class(self, target):
+        """Цель без имён конкретных фракций, объектов и регионов: «Метрополия.supply» -> «F.supply»."""
+        parts = target.split(".")
+        head = parts[0]
+        if head in self.factions:
+            parts[0] = "F"
+        elif ">" in head:
+            parts[0] = "pair"
+        elif head in ("site", "region") and len(parts) > 1:
+            parts[1] = "X"
+        elif head in self.regions:
+            parts[0] = "R"
+        return ".".join(parts)
+
+    def planet_of(self, target):
+        """Планета, к которой относится запись; до 23c одна неявная планета."""
+        return "main"
+
+    def _sum_row(self, row):
+        if self.p.lg_bug_drop_sum:
+            return                                              # R151: запись теряется
+        tick, _ph, module, target, old, new, reason = row
+        w0 = tick - tick % self.p.log_sum_window
+        key = (w0, module, self.target_class(target), reason, self.planet_of(target))
+        e = self.log_sum.setdefault(key, [0, 0, 0])
+        e[0] += 1
+        num = (isinstance(old, (int, float)) and isinstance(new, (int, float)) and not isinstance(old, bool) and not isinstance(new, bool))
+        if num:
+            e[1] = round(e[1] + (new - old), 4) if (isinstance(new - old, float) or isinstance(e[1], float)) else e[1] + (new - old)
+        else:
+            e[2] += 1
+        if self.p.lg_bug_affects_world and self.factions:
+            f = next(iter(self.factions.values()))
+            f.morale = f.morale + 0.01                          # R152: журнал меняет мир
 
     def setf(self, f: Faction, attr, value, phase, module, reason):
         old = getattr(f, attr)
