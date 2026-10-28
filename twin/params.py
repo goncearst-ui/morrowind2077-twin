@@ -442,7 +442,7 @@ class Params:
         "ASSAULT", "RAID", "RAID_OBJECT", "TROPHY", "CAPTURE", "RELEASE", "RELEASED_SUSPECT", "INTERROGATE", "INTERROGATE_TRAP",
         "KILL_NAMED", "LEADER_LOST", "LEADER_PLAYER", "NO_LEADER", "ARCH_CHANGE", "WAR_DECLARED", "TRUCE", "TRUCE_END", "REPARATIONS",
         "HEGEMON", "DEPOT_STRIKE", "DEPOT_MOVE", "SURRENDER", "ABANDON", "BRIBE_DEBT", "TERRITORIAL", "STRATEGY", "PRISONER_SALE", "ENVOY_INIT")
-    disputed_prefixes: tuple = ("RULE_", "KR_", "WAR_END_", "PLAYER_", "VENDETTA", "OBJ_", "PLANET_")   # [предл] семейства причин спорных событий
+    disputed_prefixes: tuple = ("RULE_", "KR_", "WAR_END_", "PLAYER_", "VENDETTA", "OBJ_", "PLANET_", "SCENE_")   # [предл] семейства причин спорных событий; SCENE_ добавлено в 24a (spec 24a §1.9)
     disputed_target_suffixes: tuple = (".leader", ".archetype", ".owner", ".objective", ".obj_stage")   # [предл] цели, чья смена всегда спорная
     lg_bug_named_summary: bool = False             # только для R150: строки именных уходят в сводный уровень
     lg_bug_drop_sum: bool = False                  # только для R151: сводная запись теряется
@@ -466,3 +466,23 @@ class Params:
     sn_bug_no_acc: bool = False                    # только для R162: снимок не содержит накопителей (war_acc)
     sm_bug_builtin_sum: bool = False               # только для R163: fsum зовёт встроенную сумму (spec 23e)
     sm_bug_leftover: bool = False                  # только для R164: в разбираемые исходники добавлен вызов встроенной суммы
+
+    # --- 24a слой сцены в двойнике (spec 24a; двойник, Creation Kit и плагин не описывает; флаг выключен) ---
+    scene_enabled: bool = False                    # False = штурм всегда числом, журнал как до 24a; требует reputation_enabled и inheritance_enabled [предл]
+    scene_fighters_max: int = 6                    # бойцов на экране с каждой стороны, остальное «запас» [решение Стана 2026-10-28, п.7]
+    scene_adv_cap: float = 2.0                     # потолок «качества» стороны (сила / сила противника) [предл]
+    scene_timeout: int = 2                         # суток до закрытия сцены без ответа как «выход» [предл]
+    scene_return_days: int = 30                    # через сколько суток «ничей» объект возвращается прежнему владельцу [предл; число параметр, решение Стана п.7]
+    scene_open_max: int = 1                        # открытых сцен одновременно [предл]
+    scene_strike_takes_site: bool = True           # победа игрока над владельцем делает объект «ничьим» [решение Стана 2026-10-28, пример цены победы]
+    scene_presence_radius_m: int = 100             # радиус присутствия, м; двойник не использует, значение для плагина [решение Стана 2026-10-28, п.7]
+    sc_bug_no_budget: bool = False                 # только для R165: проверка бюджета стороны выключена (spec 24a)
+    sc_bug_no_conserve: bool = False               # только для R166: в мёртвые пишется на одного больше, чем выбыло из ведра
+    sc_bug_no_cost: bool = False                   # только для R167: цена победы не применяется
+    sc_bug_leave_player: bool = False              # только для R168: выход решается в пользу атакующего (игрока)
+    sc_bug_no_wake: bool = False                   # только для R169: присутствие не будит и не держит планету
+    sc_bug_no_return: bool = False                 # только для R170: объект не возвращается
+    sc_bug_no_close: bool = False                  # только для R171: после результата сцена остаётся открытой
+    sc_bug_partial: bool = False                   # только для R172: потери применяются до проверки именных (отказ не атомарен)
+    sc_bug_extend_vendetta: bool = False           # только для R173: вендетта продлевается повторной сценой
+    sc_bug_no_timeout: bool = False                # только для R174: таймаут не срабатывает

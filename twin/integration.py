@@ -19,7 +19,7 @@ REQ = {"leader_enabled": ("evolution_enabled",), "npc_state_enabled": ("leader_e
 SCALAR = (int, float, str, type(None))
 
 
-NOT_IN_WORLD22 = ("log_two_level_enabled", "multi_planet_enabled")   # spec 23: меняют формат журнала и устройство мира, а не поведение 4-фракционного мира задачи 22; проверяются своими сценариями LG и MP
+NOT_IN_WORLD22 = ("log_two_level_enabled", "multi_planet_enabled", "scene_enabled")   # spec 24a: scene_enabled нужен только при событии «присутствие» игрока, в мире задачи 22 его нет; проверяется сценариями SC. spec 23: меняют формат журнала и устройство мира, а не поведение 4-фракционного мира задачи 22; проверяются своими сценариями LG и MP
 
 
 def flags():
