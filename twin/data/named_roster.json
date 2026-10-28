@@ -1,0 +1,179 @@
+[
+ {
+  "role": "вожак",
+  "profile": "Основатель",
+  "traits": []
+ },
+ {
+  "role": "преемник",
+  "profile": "Осторожный",
+  "traits": [
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "преемник",
+  "profile": "Радикальный",
+  "traits": [
+   "Neuroticism_Low",
+   "Conscientiousness_High"
+  ]
+ },
+ {
+  "role": "преемник",
+  "profile": "Осторожный",
+  "traits": [
+   "Agreeableness_Low",
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "преемник",
+  "profile": "Радикальный",
+  "traits": [
+   "Openness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Agreeableness_Low"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": []
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Conscientiousness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Agreeableness_Low",
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Openness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Agreeableness_Low"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": []
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Conscientiousness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Agreeableness_Low",
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Openness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Agreeableness_Low"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": []
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Conscientiousness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Agreeableness_Low",
+   "Neuroticism_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Openness_High"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": [
+   "Neuroticism_Low",
+   "Agreeableness_Low"
+  ]
+ },
+ {
+  "role": "офицер",
+  "profile": "—",
+  "traits": []
+ }
+]

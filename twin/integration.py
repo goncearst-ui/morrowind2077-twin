@@ -58,9 +58,12 @@ def _capture(w):
         _act(w, ("interrogation_enabled",), {"do": "capture", "target": R, "bucket": b, "by": K})
 
 
-def everything(p, variant=0, off=()):
-    """Четыре фракции, все флаги включены (кроме off), распорядок игрока. Без случайности. Возвращает (мир, горизонт, выключенные)."""
+def everything(p, variant=0, off=(), named=None):
+    """Четыре фракции, все флаги включены (кроме off), распорядок игрока. Без случайности. Возвращает (мир, горизонт, выключенные).
+    named: число именных на фракцию из фиксированного списка twin/data/named_roster.json (spec 23b); None = прежние ростеры."""
     q, cut = all_on(p, off)
+    if named:
+        q = replace(q, named_max=max(q.named_max, named))
     if q.ig_bug_nocap:   # R149: потолок активных целей снят
         q = replace(q, obj_bug_no_cap=True)
     ss = [Site("Метро-1", 40, 135, 4, owner=M, region="Центр"), Site("Узел", 20, 100, 2, owner=M, region="Центр"),
@@ -75,6 +78,9 @@ def everything(p, variant=0, off=()):
     w = World(fs, ss, q)
     for n, succ, off_n in ((M, ("Осторожный", "Радикальный"), 2), (R, ("Радикальный",), 2), (K, ("Осторожный",), 1), (D, ("Идеолог", "Осторожный"), 2)):
         S.give_named(w, n, successors=succ, officers=off_n)
+        if named:
+            from .named import named_roster
+            w.factions[n].named = named_roster(n, named, q)
     tr = {M: ("Openness_High",), R: ("Conscientiousness_High", "Agreeableness_Low"), K: ("Conscientiousness_High",), D: ("Agreeableness_Low", "Neuroticism_High")}
     for n, t in tr.items():
         w.factions[n].named[0]["traits"] = t

@@ -447,3 +447,7 @@ class Params:
     lg_bug_named_summary: bool = False             # только для R150: строки именных уходят в сводный уровень
     lg_bug_drop_sum: bool = False                  # только для R151: сводная запись теряется
     lg_bug_affects_world: bool = False             # только для R152: сводная запись меняет состояние мира
+
+    # --- 23b именные до сотен (spec 23): named_max выше (по умолчанию 10, [док 01, 03]); список именных twin/data/named_roster.json ---
+    nn_bug_promote: bool = False                   # только для R153: в мир на тике 100 добавляется именной «из ведра»
+    nn_bug_roster_cap: bool = False                # только для R154: генератор списка игнорирует запрошенную численность выше 10

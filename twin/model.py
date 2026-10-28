@@ -883,6 +883,10 @@ class World:
     # ---------- тик ----------
     def step(self):
         self.tick += 1
+        if self.tick == 1:
+            for fx in self.factions.values():
+                if len(fx.named) > self.p.named_max:
+                    raise ValueError(f"у фракции {fx.name} именных {len(fx.named)} больше named_max {self.p.named_max} (spec 23b)")
         if self.p.raid_discipline_enabled and not self.p.knowledge_enabled:
             raise ValueError("raid_discipline_enabled требует knowledge_enabled (нужен мотив из 08c)")
         if self.p.war_steers_attacks and not self.p.wars_enabled:
