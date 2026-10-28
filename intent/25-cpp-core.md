@@ -1,6 +1,6 @@
 # Intent 25: C++-ядро (библиотека без привязки к игре)
 
-Автор: агент по словам Стана 2026-10-28 13:12 («я бы хотел сделать ядро на С++ сразу, пока я проверяю сетап; Genesis Star Wars я удалил, у нас будет чистый Starfield»). Статус: заявка принята по слову Стана; spec (specs/25-cpp-core.spec.md) и plan 25a (plans/25a-cpp-skeleton.plan.md) написаны, ждут утверждения. Код не менялся.
+Автор: агент по словам Стана 2026-10-28 13:12 («я бы хотел сделать ядро на С++ сразу, пока я проверяю сетап; Genesis Star Wars я удалил, у нас будет чистый Starfield»). Статус: заявка принята по слову Стана; spec (specs/25-cpp-core.spec.md) принят, plan 25a (plans/25a-cpp-skeleton.plan.md) утверждён 2026-10-28; исполнение 25a начато.
 Источник: intent/23-scale-cpp-core.md (решения 3, 9, 11), reports/23-formula-order.md, reports/23d-report.md, CLAUDE.md, Project: claude/idea-interplanetary-scale.md.
 
 ## Что и зачем
