@@ -1,6 +1,7 @@
 """Задача 23c: фабрика мира с несколькими планетами (spec 23). Двойник; Creation Kit не описывает."""
 from dataclasses import replace
 
+from .arith import fsum
 from .model import Planet, Site, World
 from .named import named_roster
 
@@ -21,7 +22,7 @@ def planet_world(p, n_planets=20, named=0, multi=True, off=(), y1=90, y2=40, dos
     for k, name in enumerate(pn):
         sites.append(Site(f"{name}-1", 20, y1, 2, owner=owners[k % 4], region=name))
         sites.append(Site(f"{name}-2", 20, y2, 2, owner=owners[(k + 1) % 4], region=name))
-    owned = {n: sum(1 for s in sites if s.owner == n) for n in owners}
+    owned = {n: fsum(1 for s in sites if s.owner == n) for n in owners}
     fs = {n: S.faction(q, n, a, 3 * owned[n] + 40, dos, 20 * owned[n]) for n, a in FACTIONS}
     for i, n in enumerate(owners):
         fs[n].home = pn[i]

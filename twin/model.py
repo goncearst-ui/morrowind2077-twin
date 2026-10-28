@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 from math import ceil, floor
 
+from .arith import fsum
 from .params import Params
 from . import evolution as evo
 
@@ -384,7 +385,7 @@ class World:
         """Кого забирает выбытие n человек из состава comp = [рядовые, ветераны, офицеры].
         Сначала ярусы из prefer (недоплаченные), остаток пропорционально: офицеры floor(n × off / всего),
         ветераны floor(n × vet / всего), остаток — рядовые, не хватает — ветераны, затем офицеры. Без случайности."""
-        n = min(n, sum(comp))
+        n = min(n, fsum(comp))
         rem = [0, 0, 0]
         left = n
         for i in prefer:
@@ -393,7 +394,7 @@ class World:
             left -= x
         if left > 0:
             avail = [comp[i] - rem[i] for i in range(3)]
-            tot = sum(avail)
+            tot = fsum(avail)
             o = min(floor(left * avail[2] / tot), avail[2])
             v = min(floor(left * avail[1] / tot), avail[1])
             rem[2] += o
@@ -478,7 +479,7 @@ class World:
             return
         comp = [f.rank, f.vet, f.off]
         w = [p.tier_pay_weight[i] * comp[i] for i in range(3)]
-        tot = sum(w)
+        tot = fsum(w)
         for i, t in enumerate(TIERS):
             if comp[i] > 0:
                 old = f.paid[t]
@@ -619,7 +620,7 @@ class World:
         for r in sorted({s.region for s in self.sites}):
             ss = [s for s in self.sites if s.region == r]
             own = [(owners.get(s.name, s.owner) if owners is not None else s.owner) for s in ss]
-            den = sum(1 for o in own if o is not None) if self.p.share_denominator_owned_only else len(ss)
+            den = fsum(1 for o in own if o is not None) if self.p.share_denominator_owned_only else len(ss)
             out[r] = {f: own.count(f) / den for f in self.factions if own.count(f)}
         return out
 
@@ -652,15 +653,15 @@ class World:
         return (f.steady, f.ordinary, f.skittish)
 
     def _arc_set(self, f: Faction, hard: dict, brk: dict, reason: str):
-        old_h, old_b = sum(f.arc_hard.values()), sum(f.arc_brk.values())
+        old_h, old_b = fsum(f.arc_hard.values()), fsum(f.arc_brk.values())
         f.arc_hard, f.arc_brk = hard, brk
-        self.rec(7, "18", f"{f.name}.arc.hard", old_h, sum(hard.values()), reason)
-        self.rec(7, "18", f"{f.name}.arc.brk", old_b, sum(brk.values()), reason)
+        self.rec(7, "18", f"{f.name}.arc.hard", old_h, fsum(hard.values()), reason)
+        self.rec(7, "18", f"{f.name}.arc.brk", old_b, fsum(brk.values()), reason)
         self._arc_ratio(f, reason if reason != "ARC_PROMOTE" else "ARC_RATIO")
 
     def _arc_ratio(self, f: Faction, reason="ARC_RATIO"):
         mp = max(1, f.manpower)
-        vr, br = (sum(f.arc_hard.values())) / mp, sum(f.arc_brk.values()) / mp
+        vr, br = (fsum(f.arc_hard.values())) / mp, fsum(f.arc_brk.values()) / mp
         for tgt, v in (("vet_ratio", vr), ("brk_ratio", br)):
             old = getattr(f, "_pub_" + tgt, 0.0)
             if abs(old - v) > 1e-12:
@@ -977,7 +978,7 @@ class World:
         по объектам в порядке убывания базового дохода до потолка p.crew_cap.
         Возвращает (объект, работников сверх MinCrew, доход объекта)."""
         st = self.staffed(f)
-        left = f.manpower - sum(s.min_crew for s in st)
+        left = f.manpower - fsum(s.min_crew for s in st)
         out = []
         for s in st:
             cap = self.p.crew_cap.get(s.name, s.min_crew)
@@ -994,7 +995,7 @@ class World:
 
     def forced_count(self, f: Faction) -> int:
         """Принуждённые (spec 05): люди сверх суммарного потолка экипажа укомплектованных объектов."""
-        cap = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        cap = fsum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
         return max(0, f.manpower - cap)
 
     def fighters(self, f: Faction) -> int:
@@ -1004,7 +1005,7 @@ class World:
         return min(f.manpower, site.min_crew + 2)
 
     def expense(self, f: Faction) -> float:
-        base = sum(s.base_cost for s in self.owned(f))
+        base = fsum(s.base_cost for s in self.owned(f))
         return (base + (f.manpower + f.wounded) * self.p.per_head_cost) * self.p.archetype_cost_mult[f.archetype]
 
     def publish_dos(self, f: Faction, phase=4):
@@ -1076,7 +1077,7 @@ class World:
                     self.quiet_reg[s.region] = self.quiet_reg.get(s.region, 0.0) + inc * self.p.toll_drag
                     self.quiet_fac[(pn, f.name)] = self.quiet_fac.get((pn, f.name), 0.0) + inc
                 paying = [(s, inc) for s, inc in paying if not self._quiet_region(s.region)]
-            income = sum(inc for _, inc in paying)
+            income = fsum(inc for _, inc in paying)
             for s, inc in paying:
                 self.set_region(s.region, self.regions[s.region] - inc * self.p.toll_drag, 2, "TOLL_DRAG")
             new = max(0.0, f.supply + income - self.expense(f))
@@ -1091,7 +1092,7 @@ class World:
         if self.p.evolution_enabled:
             self.evolution_step()
         # фаза 7 — решения
-        if self.p.evolution_enabled and sum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
+        if self.p.evolution_enabled and fsum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
             raise ValueError("доктрина != 0 разрешена не более чем одной фракции (док 07)")
         if self.p.strategy_enabled:
             if not (self.p.obj_enabled and self.p.npc_state_enabled):
@@ -1184,7 +1185,7 @@ class World:
             why = "PAUSE"
         else:
             d = self.factions[s.owner]
-            weight = sum(x.yield_ for x in self.owned(d))
+            weight = fsum(x.yield_ for x in self.owned(d))
             stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
             if stock < p.raid_min_loot_share * p.strike_group_max * p.carry_unit:
                 why = "PLUNDERED"
@@ -1227,7 +1228,7 @@ class World:
         capacity = healthy * p.carry_unit
         w_cost = p.wounded_load * p.carry_unit
         morale_high = a.morale >= p.carry_morale_threshold
-        weight = sum(x.yield_ for x in self.owned(d))
+        weight = fsum(x.yield_ for x in self.owned(d))
         stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
         loot, carried = 0.0, 0
         if attacker_wins:
@@ -1272,7 +1273,7 @@ class World:
     # ---------- 06: голод ----------
     def free_people(self, f: Faction) -> int:
         """Люди не на объектах: могут работать в каналах (spec 06)."""
-        caps = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        caps = fsum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
         return f.manpower - min(f.manpower, caps)
 
     def channels(self, f: Faction):
@@ -1302,7 +1303,7 @@ class World:
     def expected_income(self, f: Faction) -> float:
         """Ожидаемый приход в сутки: доход объектов с экипажем (03a) + налёт в среднем за кулдаун (06 S3)."""
         p = self.p
-        inc = sum(i for s, _, i in self.work_plan(f) if not s.income_disabled)
+        inc = fsum(i for s, _, i in self.work_plan(f) if not s.income_disabled)
         if p.raids_enabled and f.archetype in p.raiding_archetypes:
             inc += self.regions[f.home] * p.raid_yield * (1 - p.share_rate[f.archetype]) / p.raid_cooldown
         return inc
@@ -1394,7 +1395,7 @@ class World:
     def power(self, f: Faction) -> float:
         # spec 04: бойцы взвешены по ярусам (среднее по 70/20/10 равно 1.0); без ярусов — прежнее число бойцов
         if self.p.tiers_enabled:
-            n = sum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
+            n = fsum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
         else:
             n = self.fighters(f)
         base = n * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
@@ -1680,7 +1681,7 @@ class World:
 
     # ---------- 08b: война как состояние пары ----------
     def _war_count(self, name: str) -> int:
-        return sum(1 for (a, b) in self.wars if name in (a, b))
+        return fsum(1 for (a, b) in self.wars if name in (a, b))
 
     def _war_goal(self, a: str, b: str):
         """Цель войны: объект b с наибольшим доходом среди подходящих (мотив a при war_needs_motive), при равенстве по имени."""
@@ -1978,9 +1979,9 @@ class World:
         if obj not in O.NAMES:
             raise ValueError(f"неизвестная цель {obj}")
         krs = p.obj_kr.get(obj, ())
-        if sum(1 for k in krs if O.duration_kr(k)) > p.obj_max_duration_kr:
+        if fsum(1 for k in krs if O.duration_kr(k)) > p.obj_max_duration_kr:
             raise ValueError(f"цель {obj}: KR с длительностью больше {p.obj_max_duration_kr} на фракцию (spec 16a)")
-        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        others = fsum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
         if O.is_active(f, obj) and others + 1 > p.obj_max_active and not p.obj_bug_no_cap:
             raise ValueError(f"активных целей не больше {p.obj_max_active} на мир (spec 16a)")
         f.obj_target, f.obj_rival = target, rival
@@ -2023,7 +2024,7 @@ class World:
         else:   # continue_ideal_else
             keep, new = (True, pred) if pred in (2, 5) else (False, rule[1])
         reason = "OBJ_CONTINUE" if keep else "OBJ_CHANGE"
-        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        others = fsum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
         if O.is_active(f, new) and others + 1 > p.obj_max_active and not p.inh_bug_no_cap:
             keep, new, reason = False, 0, "CAP_ACTIVE_OBJ"
         if keep:
@@ -2032,8 +2033,8 @@ class World:
             f.obj_ctr = {}
             krs = p.obj_kr.get(pred, ())
             met = [(not O.duration_kr(kr)) and O.cond(self, f, kr) for kr in krs]
-            self.rec(6, "16", f"{f.name}.obj_stage", f.obj_stage, sum(met), reason)
-            f.obj_stage, f.obj_met, f.obj_stage_tick = sum(met), met, self.tick
+            self.rec(6, "16", f"{f.name}.obj_stage", f.obj_stage, fsum(met), reason)
+            f.obj_stage, f.obj_met, f.obj_stage_tick = fsum(met), met, self.tick
             self.events.append(dict(kind="objective_continued", tick=self.tick, faction=f.name, objective=pred))
         else:
             self._obj_reset(f, new, reason, 6)
@@ -2090,7 +2091,7 @@ class World:
                     met.append(new >= kr[-1])
                 else:
                     met.append(c)
-            stage = sum(met)
+            stage = fsum(met)
             prev = f.obj_met or [False] * len(met)
             if stage != f.obj_stage:
                 n = next(i for i, (a, b) in enumerate(zip(prev, met), 1) if a != b)

@@ -464,3 +464,5 @@ class Params:
     mp_bug_batch_every_tick: bool = False          # только для R160: тихая планета пересчитывается каждый тик
     sn_bug_round: bool = False                     # только для R161: число с плавающей точкой пишется в снимок округлённым (spec 23d)
     sn_bug_no_acc: bool = False                    # только для R162: снимок не содержит накопителей (war_acc)
+    sm_bug_builtin_sum: bool = False               # только для R163: fsum зовёт встроенную сумму (spec 23e)
+    sm_bug_leftover: bool = False                  # только для R164: в разбираемые исходники добавлен вызов встроенной суммы
