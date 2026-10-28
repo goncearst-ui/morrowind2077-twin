@@ -8,7 +8,7 @@ from .extra import clean, rows
 from .model import BUCKETS_OUT, Planet, Site, World
 from .params import Params
 
-SC = tuple(f"SC{i}" for i in range(1, 18))
+SC = tuple(f"SC{i}" for i in range(1, 19))
 FORT = "Форт"
 
 
@@ -82,6 +82,16 @@ def _fact_rows(w, tick):
     return sorted((r[3], str(r[4]), str(r[5]), r[6]) for r in w.log if r[0] == tick and r[6] in keep)
 
 
+def _loss(**kw):
+    """Поражение стороны игрока: игрок за атакующего A, победила оборона B; по умолчанию игрок убил 2 человека B, A потеряла 3."""
+    base = dict(winner="defender", player_side="attacker", losses={"A": {"skittish": 3}, "B": {"skittish": 2}})
+    base.update(kw)
+    return _res(**base)
+
+
+_LOSS = _loss()
+
+
 def build(sc):
     def f(p):
         q = _p(p)
@@ -132,6 +142,8 @@ def build(sc):
             return _world(q, {**pre, 6: [("scene_result", FORT, _res(losses={"B": {"skittish": 3}}, named_dead=[("B", "B:офицер1", "player")]))]}, a5), 12
         if sc == "SC16":
             return _world(q), 1
+        if sc == "SC18":
+            return _world(q, {**pre, 6: [("scene_result", FORT, _LOSS)]}, a5), 6 + q.rep_rumor_delay + 2
         # SC17
         return _world(q, {**pre, 6: [("scene_result", FORT, _res(losses={"B": {"skittish": 3}}))]}, a5), 7
     return f
@@ -305,6 +317,41 @@ def _chk(sc):
             ds = [(n, S.evaluate(n)[0]) for n in ("DS1", "DS2", "DS4")]
             ok("при scene_enabled = False золотые файлы tests/golden/ совпадают с повторной генерацией; штопор DS1, DS2, DS4 зелёный",
                same and all(x[1] for x in ds) and not Params().scene_enabled, f"золото {'совпало' if same else 'расходится'}, штопор {ds}")
+        elif sc == "SC18":
+            a, b = w.factions["A"], w.factions["B"]
+            vd = rows(w, "B.vendetta", "SCENE_VENDETTA")
+            rep = [(r[0], r[4], r[5]) for r in rows(w, "player.rep.B", "RUMOR_DELIVERED")]
+            reg = rows(w, "rep.region.common", "RUMOR_DELIVERED")
+            ok("поражение игрока, B потеряла 2, игрок опознан: слух и падение репутации через rep_rumor_delay, вендетта B 20 суток (culprit player), объект остаётся у B, возврата нет",
+               a.dead == 3 and b.dead == 2 and [(r[0], r[4], r[5]) for r in vd] == [(6, 0, p.vendetta_max)] and b.vendetta_culprit in ("player", None)
+               and len(rep) == 1 and rep[0][0] == 6 + dly and rep[0][2] < rep[0][1] and reg
+               and w.site(FORT).owner == "B" and not rows(w, f"site.{FORT}.owner") and not w.scene_returns and not rows(w, f"scene.return.{FORT}"),
+               f"потери A {a.dead}, B {b.dead}, вендетта {[(r[0], r[4], r[5]) for r in vd]}, репутация {rep}, владелец {w.site(FORT).owner}")
+            pre, a5, hz = {3: [("presence", FORT)]}, {5: [("A", FORT)]}, 6 + dly + 2
+            qb = _mk(replace(p), hz, script={**pre, 6: [("scene_result", FORT, _loss(losses={"A": {"skittish": 3}}))]}, forced=a5)
+            ok("поражение игрока без потерь у B: ни слуха, ни вендетты",
+               qb.factions["A"].dead == 3 and qb.factions["B"].dead == 0 and not rows(qb, "B.vendetta", "SCENE_VENDETTA")
+               and not rows(qb, "player.rep.B") and not _ev(qb, "rep_unidentified"),
+               f"вендетта {rows(qb, 'B.vendetta', 'SCENE_VENDETTA')}, репутация {rows(qb, 'player.rep.B')}, слухи {_ev(qb, 'rep_unidentified')}")
+            qm = _mk(replace(p), hz, script={**pre, 6: [("scene_result", FORT, _loss(masked=True))]}, forced=a5)
+            ok("поражение игрока в маске без свидетелей: потери есть, вражды нет (слух безымянный)",
+               qm.factions["B"].dead == 2 and not rows(qm, "B.vendetta", "SCENE_VENDETTA") and not rows(qm, "player.rep.B")
+               and [e["tick"] for e in _ev(qm, "rep_unidentified")] == [6 + dly],
+               f"вендетта {rows(qm, 'B.vendetta', 'SCENE_VENDETTA')}, слухи {[e['tick'] for e in _ev(qm, 'rep_unidentified')]}")
+            qn = _mk(replace(p), hz, script={**pre, 6: [("scene_result", FORT, _loss(losses={"A": {"skittish": 1}}, named_dead=[("B", "B:офицер1", "player")]))]}, forced=a5)
+            ok("поражение игрока, B потеряла только именного: вендетта B есть",
+               not _alive(qn.factions["B"], "B:офицер1") and len(rows(qn, "B.vendetta", "SCENE_VENDETTA")) == 1,
+               f"вендетта {rows(qn, 'B.vendetta', 'SCENE_VENDETTA')}")
+            script = {1: [("presence", FORT)]}
+            for t in (2, 7, 12):
+                script[t] = [("scene_open", FORT), ("scene_result", FORT, _loss(losses={"B": {"skittish": 1}}))]
+            qr = _mk(replace(p), 14, script=script)
+            vr = rows(qr, "B.vendetta", "SCENE_VENDETTA")
+            rr = rows(qr, "player.rep.B", "RUMOR_DELIVERED")
+            ok("три проигранных нападения на владельца за 12 суток: вендетта выставлена один раз, не продлена; объект у владельца, возвратов нет; репутация падает; людей не больше, чем было",
+               len(vr) == 1 and vr[0][0] == 2 and qr.factions["B"].dead == 3 and _tot(qr.factions["B"]) == 40 and qr.site(FORT).owner == "B"
+               and not qr.scene_returns and not rows(qr, f"scene.return.{FORT}") and rr and all(r[5] < r[4] for r in rr),
+               f"вендетта {[(r[0], r[4], r[5]) for r in vr]}, B мёртвых {qr.factions['B'].dead}, репутация {[(r[0], r[5]) for r in rr]}")
         else:   # SC17
             ev = _ev(w, "assault")
             q2 = _mk(w.p, 7, script={3: [("presence", FORT)], 6: [("scene_result", FORT, _res(winner="defender", player_side="defender"))]}, forced={5: [("A", FORT)]})
@@ -332,4 +379,5 @@ S.REVERSE_EXTRA.update({
     "R172": (replace(_ON, sc_bug_partial=True), ("SC10",), "потери применяются до проверки именных"),
     "R173": (replace(_ON, sc_bug_extend_vendetta=True), ("SC13",), "вендетта продлевается повторной сценой"),
     "R174": (replace(_ON, sc_bug_no_timeout=True), ("SC6",), "таймаут не срабатывает"),
+    "R175": (replace(_ON, sc_bug_no_loss_enmity=True), ("SC18",), "при поражении стороны игрока вражда не создаётся"),
 })

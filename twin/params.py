@@ -486,3 +486,4 @@ class Params:
     sc_bug_partial: bool = False                   # только для R172: потери применяются до проверки именных (отказ не атомарен)
     sc_bug_extend_vendetta: bool = False           # только для R173: вендетта продлевается повторной сценой
     sc_bug_no_timeout: bool = False                # только для R174: таймаут не срабатывает
+    sc_bug_no_loss_enmity: bool = False            # только для R175: при поражении стороны игрока вражда не создаётся (spec 24a-2)
