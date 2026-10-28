@@ -34,10 +34,10 @@
  "sha256": {
   "ref_small_log_detail.csv": "f3dfdb3114abe21502f8a11ca91b1af24587d28bc7f8b6bc63213c4140cf9da0",
   "ref_small_log_summary.csv": "1d16c2ed6feef701e4e27e64008048d089835491bedfdfa8ee1ec87576e83b8f",
-  "ref_small_t0000.snap": "3c1d56ae6ab1e99915edbc428968134bb4ec2cd6332771a4d9f5ed25aa42d47c",
-  "ref_small_t0100.snap": "ff3af01f95197c0e97e0439ad030deebd0c8de5c685b6f08115642e3c90968de",
-  "ref_small_t0500.snap": "b534eead76b9597f526b8f475dfe5052800c0a0b7183a4cba594af7e525285dc",
-  "ref_small_t1000.snap": "25ac7ccb29b39b5751686a72518704c2d94da6c0f0795f1d66bc7accdf3eb2f1"
+  "ref_small_t0000.snap": "b55279f45c652cc6d7f0557d4a4d10161c7821b3f629804ff8f93d63a804c8c5",
+  "ref_small_t0100.snap": "ae2dca8981db76f760c2c2c81b785fce4b76af7e449646306f57d771098adb8c",
+  "ref_small_t0500.snap": "c5b135a1beea61a9992794ac297c2151ccd75d81d2002b28981af6a41b632b2b",
+  "ref_small_t1000.snap": "4284326a017fb0873990ec7e0ec58df248fa9a6eda77c2303253bf28f0e64026"
  },
  "ticks": [
   0,

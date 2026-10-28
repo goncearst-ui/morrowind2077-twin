@@ -11,12 +11,12 @@
   список — JSON-массив;  кортеж — {"t":[...]};
   словарь — {"d":[[ключ,значение],...]} в порядке вставки (порядок обхода словаря в двойнике влияет на суммы, поэтому он часть состояния);
   множество — {"s":[...]}, элементы отсортированы по своей записи;
-  запись (Site, Planet, Faction, Relation, Params) — {"o":"Имя","v":[["поле",значение],...]} в порядке полей, затем прочие атрибуты по алфавиту.
+  запись (Site, Planet, Faction, Relation, Params) — {"o":"Имя","v":[["поле",значение],...]} в порядке полей, затем прочие атрибуты по алфавиту; у Params поля с `_bug_` в имени (переключатели обратных проверок) не пишутся, при чтении они берут значения по умолчанию.
 Журналы (World.log, World.log_sum) в снимок не входят: это выход, а не состояние (иначе снимок зависел бы от режима журнала).
 Отложенные вызовы (World.scheduled) в снимок не входят и должны быть пусты: функцию в файл не записать.
 """
 import json
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 
 from .model import Faction, Planet, Relation, Site, World
 from .params import Params
@@ -67,7 +67,9 @@ def enc(x, bug=None):
 def _attrs(obj):
     """Поля записи в порядке объявления, затем прочие атрибуты (создаются на лету, напр. Faction._pub_*) по алфавиту."""
     names = [f.name for f in fields(obj)]
-    extra = sorted(k for k in vars(obj) if k not in names and k not in SKIP_EXTRA)
+    if isinstance(obj, Params):
+        names = [n for n in names if "_bug_" not in n]       # тестовые переключатели обратных проверок не состояние: новые не меняют золотые файлы
+    extra = sorted(k for k in vars(obj) if k not in names and k not in SKIP_EXTRA and not (isinstance(obj, Params) and "_bug_" in k))
     return [(n, getattr(obj, n)) for n in names + extra if n in vars(obj)]
 
 
@@ -90,6 +92,10 @@ def dec(x):
         obj = object.__new__(cls)                           # без __init__ и __post_init__: ничего не пересчитывается
         for n, v in x["v"]:
             object.__setattr__(obj, n, dec(v))
+        if cls is Params:                                   # поля, которых нет в снимке (тестовые переключатели `_bug_`), берут значения по умолчанию
+            for f in fields(Params):
+                if f.name not in vars(obj):
+                    object.__setattr__(obj, f.name, f.default if f.default is not MISSING else f.default_factory())
         return obj
     raise SnapshotError(f"неизвестная запись: {list(x)[:3]}")
 
