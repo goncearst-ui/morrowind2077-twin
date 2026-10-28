@@ -442,7 +442,7 @@ class Params:
         "ASSAULT", "RAID", "RAID_OBJECT", "TROPHY", "CAPTURE", "RELEASE", "RELEASED_SUSPECT", "INTERROGATE", "INTERROGATE_TRAP",
         "KILL_NAMED", "LEADER_LOST", "LEADER_PLAYER", "NO_LEADER", "ARCH_CHANGE", "WAR_DECLARED", "TRUCE", "TRUCE_END", "REPARATIONS",
         "HEGEMON", "DEPOT_STRIKE", "DEPOT_MOVE", "SURRENDER", "ABANDON", "BRIBE_DEBT", "TERRITORIAL", "STRATEGY", "PRISONER_SALE", "ENVOY_INIT")
-    disputed_prefixes: tuple = ("RULE_", "KR_", "WAR_END_", "PLAYER_", "VENDETTA", "OBJ_")   # [предл] семейства причин спорных событий
+    disputed_prefixes: tuple = ("RULE_", "KR_", "WAR_END_", "PLAYER_", "VENDETTA", "OBJ_", "PLANET_")   # [предл] семейства причин спорных событий
     disputed_target_suffixes: tuple = (".leader", ".archetype", ".owner", ".objective", ".obj_stage")   # [предл] цели, чья смена всегда спорная
     lg_bug_named_summary: bool = False             # только для R150: строки именных уходят в сводный уровень
     lg_bug_drop_sum: bool = False                  # только для R151: сводная запись теряется
@@ -451,3 +451,14 @@ class Params:
     # --- 23b именные до сотен (spec 23): named_max выше (по умолчанию 10, [док 01, 03]); список именных twin/data/named_roster.json ---
     nn_bug_promote: bool = False                   # только для R153: в мир на тике 100 добавляется именной «из ведра»
     nn_bug_roster_cap: bool = False                # только для R154: генератор списка игнорирует запрошенную численность выше 10
+
+    # --- 23c несколько планет и ленивый пересчёт «тихих» (spec 23; двойник, Creation Kit не описывает) ---
+    multi_planet_enabled: bool = False             # False = одна неявная планета, журнал как до 23c [решение Стана 2026-10-28]
+    quiet_window_k: int = 10                       # тиков без событий до перехода в «тихую» [предл]
+    quiet_period_p: int = 7                        # период пакетного пересчёта тихой планеты, тиков [предл; параметр, подбирается прогонами]
+    mp_bug_off_by_one: bool = False                # только для R155: пакет считает на тик меньше
+    mp_bug_skip_income: bool = False               # только для R156: доход тихих объектов теряется
+    mp_bug_no_wake: bool = False                   # только для R157: событие не будит тихую планету
+    mp_bug_never_quiet: bool = False               # только для R158: планета не возвращается в тихие
+    mp_bug_shared_hegemon: bool = False            # только для R159: хозяин каждой планеты считается по всем объектам мира
+    mp_bug_batch_every_tick: bool = False          # только для R160: тихая планета пересчитывается каждый тик

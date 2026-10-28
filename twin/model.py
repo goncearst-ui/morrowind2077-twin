@@ -28,6 +28,16 @@ class Site:
 
 
 @dataclass
+class Planet:
+    """Планета (spec 23c): набор регионов; состояние активная/тихая; тихую считают пакетом раз в quiet_period_p тиков."""
+    name: str
+    regions: tuple
+    state: str = "active"          # active | quiet
+    last_event: int = 0            # тик последнего события на планете
+    last_batch: int = 0            # до какого тика планета обсчитана
+
+
+@dataclass
 class Faction:
     name: str
     archetype: str
@@ -167,6 +177,11 @@ class World:
     hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
     hegemon_tick: int = 0                                # тик последней смены статуса
     hegemon_last_cand: str | None = None                 # последний кандидат (только для R81)
+    planets: dict = field(default_factory=dict)          # имя планеты -> Planet (spec 23c); пусто и флаг выключен = одна неявная планета
+    region_planet: dict = field(default_factory=dict)    # регион -> имя планеты
+    quiet_reg: dict = field(default_factory=dict)        # регион тихой планеты -> падение достатка за тик от пошлины (только текущий тик)
+    quiet_fac: dict = field(default_factory=dict)        # (планета, фракция) -> доход тихих объектов за тик (только текущий тик)
+    hegemon_p: dict = field(default_factory=dict)        # планета -> [хозяин, тик смены, последний кандидат] (spec 14 по планетам, 23c)
     log_sum: dict = field(default_factory=dict)          # сводный журнал (spec 23a): (начало окна, модуль, класс цели, причина, планета) -> [число, сумма разностей, число нечисловых]
 
     @property
@@ -188,6 +203,8 @@ class World:
             self.regions = {"common": self.p.region_start}
         for name in [f.home for f in self.factions.values()] + [s.region for s in self.sites]:
             self.regions.setdefault(name, self.p.region_start)
+        if self.p.multi_planet_enabled:
+            self._init_planets()
         for f in self.factions.values():
             if f.depot is None:
                 f.depot = self.best_depot(f)
@@ -238,8 +255,21 @@ class World:
         return ".".join(parts)
 
     def planet_of(self, target):
-        """Планета, к которой относится запись; до 23c одна неявная планета."""
-        return "main"
+        """Планета, к которой относится запись (spec 23c); без планет или у записи без привязки — «main» или «-» (глобальное по фракции)."""
+        if not self.region_planet:
+            return "main"
+        parts = target.split(".")
+        head = parts[0]
+        if head in self.region_planet:
+            return self.region_planet[head]
+        if head == "region" and len(parts) > 1:
+            return self.region_planet.get(parts[1], "-")
+        if head == "site" and len(parts) > 1:
+            st = next((x for x in self.sites if x.name == parts[1]), None)
+            return self.region_planet.get(st.region, "-") if st else "-"
+        if head == "planet" and len(parts) > 1:
+            return parts[1]
+        return "-"
 
     def _sum_row(self, row):
         if self.p.lg_bug_drop_sum:
@@ -262,6 +292,84 @@ class World:
         old = getattr(f, attr)
         setattr(f, attr, value)
         self.rec(phase, module, f"{f.name}.{attr}", old, value, reason)
+
+    # ---------- 23c: несколько планет и ленивый пересчёт «тихих» (spec 23) ----------
+    def _init_planets(self):
+        """Каждый регион принадлежит планете; регионы без планеты уходят на неявную «main»."""
+        for pl in self.planets.values():
+            for r in pl.regions:
+                self.region_planet[r] = pl.name
+        loose = [r for r in self.regions if r not in self.region_planet]
+        if loose:
+            main = self.planets.setdefault("main", Planet("main", ()))
+            main.regions = tuple(main.regions) + tuple(loose)
+            for r in loose:
+                self.region_planet[r] = "main"
+
+    def _home_planets(self):
+        return {self.region_planet.get(f.home) for f in self.factions.values()}
+
+    def _quiet_region(self, region):
+        if not self.p.multi_planet_enabled:
+            return False
+        pl = self.region_planet.get(region)
+        return pl is not None and self.planets[pl].state == "quiet"
+
+    def _set_planet_state(self, pl, state, reason):
+        old = pl.state
+        pl.state = state
+        self.rec(8, "23", f"planet.{pl.name}.state", old, state, reason)
+
+    def _touch_site(self, s):
+        """Событие на объекте (штурм, налёт): планета активна с этого тика; тихая сначала догоняется до текущего тика."""
+        if not self.p.multi_planet_enabled:
+            return
+        pl = self.planets.get(self.region_planet.get(s.region))
+        if pl is None:
+            return
+        if pl.state == "quiet" and not self.p.mp_bug_no_wake:
+            self._planet_catch_up(pl, self.tick)
+            self._set_planet_state(pl, "active", "PLANET_ACTIVE")
+        if not self.p.mp_bug_no_wake:
+            pl.last_event = self.tick
+
+    def _planet_catch_up(self, pl, upto):
+        """Один пакетный пересчёт тихой планеты за n = upto - last_batch тиков: достаток регионов по точной формуле, доходы тихих объектов одной суммой."""
+        p = self.p
+        n = upto - pl.last_batch - (1 if p.mp_bug_off_by_one else 0)
+        pl.last_batch = upto
+        if n <= 0:
+            return
+        r = p.region_recovery
+        for reg in pl.regions:
+            g = self.quiet_reg.get(reg, 0.0)
+            hi = p.region_max - g
+            d = r - g
+            x0 = self.regions[reg]
+            x = max(0.0, min(hi, x0 + d))                     # первый тик: восстановление, зажим сверху, пошлина, зажим снизу
+            if n > 1:
+                x = max(0.0, min(hi, x + (n - 1) * d))        # дальше сдвиг на d за тик: зажатие по одному краю
+            self.set_region(reg, x, 8, "QUIET_BATCH")
+        if not p.mp_bug_skip_income:
+            for fname in sorted(self.factions):
+                inc = self.quiet_fac.get((pl.name, fname), 0.0)
+                if inc:
+                    f = self.factions[fname]
+                    self.setf(f, "supply", f.supply + n * inc, 8, "06", "QUIET_INCOME")
+        self.events.append(dict(tick=self.tick, kind="planet_batch", planet=pl.name, n=n))
+
+    def _planet_step(self):
+        """Фаза 8: возврат активных планет в тихие (K тиков без событий, без домов фракций), пакетный пересчёт тихих раз в P тиков."""
+        p = self.p
+        homes = self._home_planets()
+        for name in sorted(self.planets):
+            pl = self.planets[name]
+            if pl.state == "active":
+                if name not in homes and self.tick - pl.last_event >= p.quiet_window_k and not p.mp_bug_never_quiet:
+                    pl.last_batch = self.tick
+                    self._set_planet_state(pl, "quiet", "PLANET_QUIET")
+            elif self.tick - pl.last_batch >= (1 if p.mp_bug_batch_every_tick else p.quiet_period_p):
+                self._planet_catch_up(pl, self.tick)
 
     # ---------- 04: ярусы (spec 04) ----------
     def init_tiers(self, f: Faction):
@@ -787,9 +895,10 @@ class World:
         n["fear"] = new
 
     # ---------- 14: хозяин планеты (spec 14) ----------
-    def _hegemon_candidate(self) -> str:
+    def _hegemon_candidate(self, sites=None) -> str:
         counts = {}
-        for _, _, _, owner in self.registry():
+        owners = [o for _, _, _, o in self.registry()] if sites is None else [x.owner for x in sites]
+        for owner in owners:
             if owner is not None or self.p.hegemon_count_unowned:
                 counts[owner] = counts.get(owner, 0) + 1
         if not counts:
@@ -801,7 +910,30 @@ class World:
             return top[0] if top[0] is not None else "Contested"
         return "Contested"
 
+    def _hegemon_step_planets(self):
+        """Хозяин каждой активной планеты считается отдельно (spec 23c); состояние и пауза по каждой планете свои. Тихие не пересчитываются: смена владельца объекта будит планету."""
+        p = self.p
+        for name in sorted(self.planets):
+            pl = self.planets[name]
+            if pl.state != "active":
+                continue
+            sites = self.sites if p.mp_bug_shared_hegemon else [x for x in self.sites if self.region_planet.get(x.region) == name]
+            cand = self._hegemon_candidate(sites)
+            st = self.hegemon_p.setdefault(name, [None, 0, None])
+            old, apply = st[0], False
+            if old is None:
+                apply = True
+            elif cand != old and self.tick - st[1] >= p.hegemon_cooldown:
+                apply = not (p.hegemon_drop_deferred and cand == st[2])
+            st[2] = cand
+            if apply and cand != old:
+                st[0], st[1] = cand, self.tick
+                self.rec(8, "14", f"planet.{name}.hegemon", old if old is not None else "-", cand, "HEGEMON")
+                self.events.append(dict(tick=self.tick, kind="hegemon_change", planet=name, old=old, new=cand))
+
     def _hegemon_step(self):
+        if self.p.multi_planet_enabled:
+            return self._hegemon_step_planets()
         p, cand = self.p, self._hegemon_candidate()
         old, apply = self.hegemon, False
         if old is None:
@@ -921,7 +1053,11 @@ class World:
             self.recover(f)
         for f in fs:
             self.reorganize(f)
+        if self.p.multi_planet_enabled:
+            self.quiet_reg, self.quiet_fac = {}, {}
         for name in list(self.regions):
+            if self._quiet_region(name):
+                continue
             self.set_region(name, self.regions[name] + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
         for f in fs:
@@ -933,6 +1069,13 @@ class World:
             for name in [n for n in f.workers if n not in {s.name for s, _, _ in plan}]:
                 self.rec(2, "06", f"{f.name}.workers.{name}", f.workers.pop(name), 0, "WORKERS")
             paying = [(s, inc) for s, _, inc in plan if not s.income_disabled]
+            if self.p.multi_planet_enabled:
+                lazy = [(s, inc) for s, inc in paying if self._quiet_region(s.region)]
+                for s, inc in lazy:   # тихая планета: доход и пошлина копятся ставкой на пакетный пересчёт (spec 23c)
+                    pn = self.region_planet[s.region]
+                    self.quiet_reg[s.region] = self.quiet_reg.get(s.region, 0.0) + inc * self.p.toll_drag
+                    self.quiet_fac[(pn, f.name)] = self.quiet_fac.get((pn, f.name), 0.0) + inc
+                paying = [(s, inc) for s, inc in paying if not self._quiet_region(s.region)]
             income = sum(inc for _, inc in paying)
             for s, inc in paying:
                 self.set_region(s.region, self.regions[s.region] - inc * self.p.toll_drag, 2, "TOLL_DRAG")
@@ -975,6 +1118,9 @@ class World:
         # фаза 8 — война как состояние пары (spec 08b): читает 08a и 08c, пишет в чужие модули только цену (06)
         if self.p.wars_enabled:
             self.war_step()
+        # фаза 8 — планеты: переходы активная/тихая и пакетный пересчёт тихих (spec 23c)
+        if self.p.multi_planet_enabled:
+            self._planet_step()
         # фаза 8 — доли фракций в регионах (spec 13a): производная, ничего не меняет в других модулях
         if self.p.region_share_enabled:
             self._publish_shares()
@@ -1049,6 +1195,7 @@ class World:
     def raid_object(self, a: Faction, s: Site, forced: bool):
         """Spec 03c: налёт на объект. Бой как в штурме, но объект не захватывается; выбывшие частью ранены;
         ёмкость и мораль группы решают, что несут; брошенные раненые попадают в плен по укладу обороны."""
+        self._touch_site(s)
         p = self.p
         d = self.factions[s.owner]
         if a.manpower == 0 or d is a:
@@ -1301,6 +1448,7 @@ class World:
 
     # ---------- 13: разрешение штурма ----------
     def assault(self, a: Faction, s: Site, forced: bool):
+        self._touch_site(s)
         p = self.p
         d = self.factions[s.owner]
         a.last_assault = self.tick
