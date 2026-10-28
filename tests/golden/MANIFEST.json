@@ -1,0 +1,48 @@
+{
+ "config": {
+  "dos": 16,
+  "n_planets": 20,
+  "named": 25,
+  "y1": 56,
+  "y2": 24
+ },
+ "horizon": 1000,
+ "player_script": {
+  "400": [
+   [
+    "kill",
+    "Метрополия",
+    "Метрополия:вожак"
+   ]
+  ],
+  "450": [
+   [
+    "kill",
+    "Колония",
+    "Колония:офицер1"
+   ]
+  ],
+  "600": [
+   [
+    "kill",
+    "Налётчики",
+    "Налётчики:вожак"
+   ]
+  ]
+ },
+ "schema": 1,
+ "sha256": {
+  "ref_small_log_detail.csv": "f3dfdb3114abe21502f8a11ca91b1af24587d28bc7f8b6bc63213c4140cf9da0",
+  "ref_small_log_summary.csv": "1d16c2ed6feef701e4e27e64008048d089835491bedfdfa8ee1ec87576e83b8f",
+  "ref_small_t0000.snap": "4ff12c15e95a3471b51403c71f2220065a4bfb1177b0db3289b8c86d74b1e6ed",
+  "ref_small_t0100.snap": "5a8d4cc1687cffcc5ff11ae0bc02eec9e9c83f4573a73f54aec3283db895b3b9",
+  "ref_small_t0500.snap": "5cbb16c3bf9e54c5a4e5d1bd8d8e7e33fa1a4773da8a569ec5af2a1bcf40f0a7",
+  "ref_small_t1000.snap": "f5e7920ba91b78c2299b5715d4a1f08256a84234624d878d7cd3e9c674660897"
+ },
+ "ticks": [
+  0,
+  100,
+  500,
+  1000
+ ]
+}

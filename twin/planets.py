@@ -1,8 +1,6 @@
 """Задача 23c: фабрика мира с несколькими планетами (spec 23). Двойник; Creation Kit не описывает."""
 from dataclasses import replace
 
-from . import integration as I
-from . import scenarios as S
 from .model import Planet, Site, World
 from .named import named_roster
 
@@ -12,6 +10,8 @@ FACTIONS = (("Метрополия", "Контролёры"), ("Налётчик
 def planet_world(p, n_planets=20, named=0, multi=True, off=(), y1=90, y2=40, dos=30):
     """Четыре фракции, n_planets планет по два объекта; объекты раздаются по кругу, дома фракций на первых четырёх планетах;
     все флаги *_enabled включены (кроме off), multi_planet_enabled = multi. Без случайности. Возвращает (мир, выключенные)."""
+    from . import integration as I   # внутри функции: twin.x23c импортирует этот модуль при загрузке twin.scenarios
+    from . import scenarios as S
     q, cut = I.all_on(p, off)
     q = replace(q, multi_planet_enabled=multi)
     if named:

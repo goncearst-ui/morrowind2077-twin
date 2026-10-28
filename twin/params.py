@@ -462,3 +462,5 @@ class Params:
     mp_bug_never_quiet: bool = False               # только для R158: планета не возвращается в тихие
     mp_bug_shared_hegemon: bool = False            # только для R159: хозяин каждой планеты считается по всем объектам мира
     mp_bug_batch_every_tick: bool = False          # только для R160: тихая планета пересчитывается каждый тик
+    sn_bug_round: bool = False                     # только для R161: число с плавающей точкой пишется в снимок округлённым (spec 23d)
+    sn_bug_no_acc: bool = False                    # только для R162: снимок не содержит накопителей (war_acc)
