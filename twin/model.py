@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 from math import ceil, floor
 
+from .arith import fsum
 from .params import Params
 from . import evolution as evo
 
@@ -25,6 +26,16 @@ class Site:
     income_disabled: bool = False  # сценарий «потеря узла»
     region: str = "common"         # регион, где стоит объект (spec 03b)
     kind: int = 0                  # 0 объект на планете, 1 станция [док 15, TF_Asset<N>_Type] (spec 15)
+
+
+@dataclass
+class Planet:
+    """Планета (spec 23c): набор регионов; состояние активная/тихая; тихую считают пакетом раз в quiet_period_p тиков."""
+    name: str
+    regions: tuple
+    state: str = "active"          # active | quiet
+    last_event: int = 0            # тик последнего события на планете
+    last_batch: int = 0            # до какого тика планета обсчитана
 
 
 @dataclass
@@ -167,6 +178,12 @@ class World:
     hegemon: str | None = None                           # хозяин планеты: имя фракции или "Contested"; None = ещё не считали (spec 14)
     hegemon_tick: int = 0                                # тик последней смены статуса
     hegemon_last_cand: str | None = None                 # последний кандидат (только для R81)
+    planets: dict = field(default_factory=dict)          # имя планеты -> Planet (spec 23c); пусто и флаг выключен = одна неявная планета
+    region_planet: dict = field(default_factory=dict)    # регион -> имя планеты
+    quiet_reg: dict = field(default_factory=dict)        # регион тихой планеты -> падение достатка за тик от пошлины (только текущий тик)
+    quiet_fac: dict = field(default_factory=dict)        # (планета, фракция) -> доход тихих объектов за тик (только текущий тик)
+    hegemon_p: dict = field(default_factory=dict)        # планета -> [хозяин, тик смены, последний кандидат] (spec 14 по планетам, 23c)
+    log_sum: dict = field(default_factory=dict)          # сводный журнал (spec 23a): (начало окна, модуль, класс цели, причина, планета) -> [число, сумма разностей, число нечисловых]
 
     @property
     def prosperity(self) -> float:
@@ -187,6 +204,8 @@ class World:
             self.regions = {"common": self.p.region_start}
         for name in [f.home for f in self.factions.values()] + [s.region for s in self.sites]:
             self.regions.setdefault(name, self.p.region_start)
+        if self.p.multi_planet_enabled:
+            self._init_planets()
         for f in self.factions.values():
             if f.depot is None:
                 f.depot = self.best_depot(f)
@@ -203,14 +222,155 @@ class World:
     def rec(self, phase, module, target, old, new, reason):
         if old == new:
             return
-        self.log.append((self.tick, phase, module, target,
-                         round(old, 4) if isinstance(old, float) else old,
-                         round(new, 4) if isinstance(new, float) else new, reason))
+        row = (self.tick, phase, module, target,
+               round(old, 4) if isinstance(old, float) else old,
+               round(new, 4) if isinstance(new, float) else new, reason)
+        if self.p.log_two_level_enabled and not self.is_detail(target, reason):
+            self._sum_row(row)
+            return
+        self.log.append(row)
+
+    # ---------- 23a: два уровня журнала (spec 23) ----------
+    def is_detail(self, target, reason):
+        """Подробный уровень: любые именные, спорные причины и цели [предл, spec 23 §1.23a]. Всё остальное идёт в сводный."""
+        p = self.p
+        if p.lg_bug_named_summary:
+            named = False                                       # R150: именные не защищены
+        else:
+            named = ".named." in target
+        return (named or reason in p.disputed_reasons or reason.startswith(p.disputed_prefixes)
+                or target.endswith(p.disputed_target_suffixes) or "hegemon" in target)
+
+    def target_class(self, target):
+        """Цель без имён конкретных фракций, объектов и регионов: «Метрополия.supply» -> «F.supply»."""
+        parts = target.split(".")
+        head = parts[0]
+        if head in self.factions:
+            parts[0] = "F"
+        elif ">" in head:
+            parts[0] = "pair"
+        elif head in ("site", "region") and len(parts) > 1:
+            parts[1] = "X"
+        elif head in self.regions:
+            parts[0] = "R"
+        return ".".join(parts)
+
+    def planet_of(self, target):
+        """Планета, к которой относится запись (spec 23c); без планет или у записи без привязки — «main» или «-» (глобальное по фракции)."""
+        if not self.region_planet:
+            return "main"
+        parts = target.split(".")
+        head = parts[0]
+        if head in self.region_planet:
+            return self.region_planet[head]
+        if head == "region" and len(parts) > 1:
+            return self.region_planet.get(parts[1], "-")
+        if head == "site" and len(parts) > 1:
+            st = next((x for x in self.sites if x.name == parts[1]), None)
+            return self.region_planet.get(st.region, "-") if st else "-"
+        if head == "planet" and len(parts) > 1:
+            return parts[1]
+        return "-"
+
+    def _sum_row(self, row):
+        if self.p.lg_bug_drop_sum:
+            return                                              # R151: запись теряется
+        tick, _ph, module, target, old, new, reason = row
+        w0 = tick - tick % self.p.log_sum_window
+        key = (w0, module, self.target_class(target), reason, self.planet_of(target))
+        e = self.log_sum.setdefault(key, [0, 0, 0])
+        e[0] += 1
+        num = (isinstance(old, (int, float)) and isinstance(new, (int, float)) and not isinstance(old, bool) and not isinstance(new, bool))
+        if num:
+            e[1] = round(e[1] + (new - old), 4) if (isinstance(new - old, float) or isinstance(e[1], float)) else e[1] + (new - old)
+        else:
+            e[2] += 1
+        if self.p.lg_bug_affects_world and self.factions:
+            f = next(iter(self.factions.values()))
+            f.morale = f.morale + 0.01                          # R152: журнал меняет мир
 
     def setf(self, f: Faction, attr, value, phase, module, reason):
         old = getattr(f, attr)
         setattr(f, attr, value)
         self.rec(phase, module, f"{f.name}.{attr}", old, value, reason)
+
+    # ---------- 23c: несколько планет и ленивый пересчёт «тихих» (spec 23) ----------
+    def _init_planets(self):
+        """Каждый регион принадлежит планете; регионы без планеты уходят на неявную «main»."""
+        for pl in self.planets.values():
+            for r in pl.regions:
+                self.region_planet[r] = pl.name
+        loose = [r for r in self.regions if r not in self.region_planet]
+        if loose:
+            main = self.planets.setdefault("main", Planet("main", ()))
+            main.regions = tuple(main.regions) + tuple(loose)
+            for r in loose:
+                self.region_planet[r] = "main"
+
+    def _home_planets(self):
+        return {self.region_planet.get(f.home) for f in self.factions.values()}
+
+    def _quiet_region(self, region):
+        if not self.p.multi_planet_enabled:
+            return False
+        pl = self.region_planet.get(region)
+        return pl is not None and self.planets[pl].state == "quiet"
+
+    def _set_planet_state(self, pl, state, reason):
+        old = pl.state
+        pl.state = state
+        self.rec(8, "23", f"planet.{pl.name}.state", old, state, reason)
+
+    def _touch_site(self, s):
+        """Событие на объекте (штурм, налёт): планета активна с этого тика; тихая сначала догоняется до текущего тика."""
+        if not self.p.multi_planet_enabled:
+            return
+        pl = self.planets.get(self.region_planet.get(s.region))
+        if pl is None:
+            return
+        if pl.state == "quiet" and not self.p.mp_bug_no_wake:
+            self._planet_catch_up(pl, self.tick)
+            self._set_planet_state(pl, "active", "PLANET_ACTIVE")
+        if not self.p.mp_bug_no_wake:
+            pl.last_event = self.tick
+
+    def _planet_catch_up(self, pl, upto):
+        """Один пакетный пересчёт тихой планеты за n = upto - last_batch тиков: достаток регионов по точной формуле, доходы тихих объектов одной суммой."""
+        p = self.p
+        n = upto - pl.last_batch - (1 if p.mp_bug_off_by_one else 0)
+        pl.last_batch = upto
+        if n <= 0:
+            return
+        r = p.region_recovery
+        for reg in pl.regions:
+            g = self.quiet_reg.get(reg, 0.0)
+            hi = p.region_max - g
+            d = r - g
+            x0 = self.regions[reg]
+            x = max(0.0, min(hi, x0 + d))                     # первый тик: восстановление, зажим сверху, пошлина, зажим снизу
+            if n > 1:
+                x = max(0.0, min(hi, x + (n - 1) * d))        # дальше сдвиг на d за тик: зажатие по одному краю
+            self.set_region(reg, x, 8, "QUIET_BATCH")
+        if not p.mp_bug_skip_income:
+            for fname in sorted(self.factions):
+                inc = self.quiet_fac.get((pl.name, fname), 0.0)
+                if inc:
+                    f = self.factions[fname]
+                    self.setf(f, "supply", f.supply + n * inc, 8, "06", "QUIET_INCOME")
+        self.events.append(dict(tick=self.tick, kind="planet_batch", planet=pl.name, n=n))
+
+    def _planet_step(self):
+        """Фаза 8: возврат активных планет в тихие (K тиков без событий, без домов фракций), пакетный пересчёт тихих раз в P тиков."""
+        p = self.p
+        homes = self._home_planets()
+        for name in sorted(self.planets):
+            pl = self.planets[name]
+            if pl.state == "active":
+                if name not in homes and self.tick - pl.last_event >= p.quiet_window_k and not p.mp_bug_never_quiet:
+                    pl.last_batch = self.tick
+                    self._set_planet_state(pl, "quiet", "PLANET_QUIET")
+            elif self.tick - pl.last_batch >= (1 if p.mp_bug_batch_every_tick else p.quiet_period_p):
+                self._planet_catch_up(pl, self.tick)
 
     # ---------- 04: ярусы (spec 04) ----------
     def init_tiers(self, f: Faction):
@@ -225,7 +385,7 @@ class World:
         """Кого забирает выбытие n человек из состава comp = [рядовые, ветераны, офицеры].
         Сначала ярусы из prefer (недоплаченные), остаток пропорционально: офицеры floor(n × off / всего),
         ветераны floor(n × vet / всего), остаток — рядовые, не хватает — ветераны, затем офицеры. Без случайности."""
-        n = min(n, sum(comp))
+        n = min(n, fsum(comp))
         rem = [0, 0, 0]
         left = n
         for i in prefer:
@@ -234,7 +394,7 @@ class World:
             left -= x
         if left > 0:
             avail = [comp[i] - rem[i] for i in range(3)]
-            tot = sum(avail)
+            tot = fsum(avail)
             o = min(floor(left * avail[2] / tot), avail[2])
             v = min(floor(left * avail[1] / tot), avail[1])
             rem[2] += o
@@ -319,7 +479,7 @@ class World:
             return
         comp = [f.rank, f.vet, f.off]
         w = [p.tier_pay_weight[i] * comp[i] for i in range(3)]
-        tot = sum(w)
+        tot = fsum(w)
         for i, t in enumerate(TIERS):
             if comp[i] > 0:
                 old = f.paid[t]
@@ -460,7 +620,7 @@ class World:
         for r in sorted({s.region for s in self.sites}):
             ss = [s for s in self.sites if s.region == r]
             own = [(owners.get(s.name, s.owner) if owners is not None else s.owner) for s in ss]
-            den = sum(1 for o in own if o is not None) if self.p.share_denominator_owned_only else len(ss)
+            den = fsum(1 for o in own if o is not None) if self.p.share_denominator_owned_only else len(ss)
             out[r] = {f: own.count(f) / den for f in self.factions if own.count(f)}
         return out
 
@@ -493,15 +653,15 @@ class World:
         return (f.steady, f.ordinary, f.skittish)
 
     def _arc_set(self, f: Faction, hard: dict, brk: dict, reason: str):
-        old_h, old_b = sum(f.arc_hard.values()), sum(f.arc_brk.values())
+        old_h, old_b = fsum(f.arc_hard.values()), fsum(f.arc_brk.values())
         f.arc_hard, f.arc_brk = hard, brk
-        self.rec(7, "18", f"{f.name}.arc.hard", old_h, sum(hard.values()), reason)
-        self.rec(7, "18", f"{f.name}.arc.brk", old_b, sum(brk.values()), reason)
+        self.rec(7, "18", f"{f.name}.arc.hard", old_h, fsum(hard.values()), reason)
+        self.rec(7, "18", f"{f.name}.arc.brk", old_b, fsum(brk.values()), reason)
         self._arc_ratio(f, reason if reason != "ARC_PROMOTE" else "ARC_RATIO")
 
     def _arc_ratio(self, f: Faction, reason="ARC_RATIO"):
         mp = max(1, f.manpower)
-        vr, br = (sum(f.arc_hard.values())) / mp, sum(f.arc_brk.values()) / mp
+        vr, br = (fsum(f.arc_hard.values())) / mp, fsum(f.arc_brk.values()) / mp
         for tgt, v in (("vet_ratio", vr), ("brk_ratio", br)):
             old = getattr(f, "_pub_" + tgt, 0.0)
             if abs(old - v) > 1e-12:
@@ -736,9 +896,10 @@ class World:
         n["fear"] = new
 
     # ---------- 14: хозяин планеты (spec 14) ----------
-    def _hegemon_candidate(self) -> str:
+    def _hegemon_candidate(self, sites=None) -> str:
         counts = {}
-        for _, _, _, owner in self.registry():
+        owners = [o for _, _, _, o in self.registry()] if sites is None else [x.owner for x in sites]
+        for owner in owners:
             if owner is not None or self.p.hegemon_count_unowned:
                 counts[owner] = counts.get(owner, 0) + 1
         if not counts:
@@ -750,7 +911,30 @@ class World:
             return top[0] if top[0] is not None else "Contested"
         return "Contested"
 
+    def _hegemon_step_planets(self):
+        """Хозяин каждой активной планеты считается отдельно (spec 23c); состояние и пауза по каждой планете свои. Тихие не пересчитываются: смена владельца объекта будит планету."""
+        p = self.p
+        for name in sorted(self.planets):
+            pl = self.planets[name]
+            if pl.state != "active":
+                continue
+            sites = self.sites if p.mp_bug_shared_hegemon else [x for x in self.sites if self.region_planet.get(x.region) == name]
+            cand = self._hegemon_candidate(sites)
+            st = self.hegemon_p.setdefault(name, [None, 0, None])
+            old, apply = st[0], False
+            if old is None:
+                apply = True
+            elif cand != old and self.tick - st[1] >= p.hegemon_cooldown:
+                apply = not (p.hegemon_drop_deferred and cand == st[2])
+            st[2] = cand
+            if apply and cand != old:
+                st[0], st[1] = cand, self.tick
+                self.rec(8, "14", f"planet.{name}.hegemon", old if old is not None else "-", cand, "HEGEMON")
+                self.events.append(dict(tick=self.tick, kind="hegemon_change", planet=name, old=old, new=cand))
+
     def _hegemon_step(self):
+        if self.p.multi_planet_enabled:
+            return self._hegemon_step_planets()
         p, cand = self.p, self._hegemon_candidate()
         old, apply = self.hegemon, False
         if old is None:
@@ -794,7 +978,7 @@ class World:
         по объектам в порядке убывания базового дохода до потолка p.crew_cap.
         Возвращает (объект, работников сверх MinCrew, доход объекта)."""
         st = self.staffed(f)
-        left = f.manpower - sum(s.min_crew for s in st)
+        left = f.manpower - fsum(s.min_crew for s in st)
         out = []
         for s in st:
             cap = self.p.crew_cap.get(s.name, s.min_crew)
@@ -811,7 +995,7 @@ class World:
 
     def forced_count(self, f: Faction) -> int:
         """Принуждённые (spec 05): люди сверх суммарного потолка экипажа укомплектованных объектов."""
-        cap = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        cap = fsum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
         return max(0, f.manpower - cap)
 
     def fighters(self, f: Faction) -> int:
@@ -821,7 +1005,7 @@ class World:
         return min(f.manpower, site.min_crew + 2)
 
     def expense(self, f: Faction) -> float:
-        base = sum(s.base_cost for s in self.owned(f))
+        base = fsum(s.base_cost for s in self.owned(f))
         return (base + (f.manpower + f.wounded) * self.p.per_head_cost) * self.p.archetype_cost_mult[f.archetype]
 
     def publish_dos(self, f: Faction, phase=4):
@@ -832,6 +1016,10 @@ class World:
     # ---------- тик ----------
     def step(self):
         self.tick += 1
+        if self.tick == 1:
+            for fx in self.factions.values():
+                if len(fx.named) > self.p.named_max:
+                    raise ValueError(f"у фракции {fx.name} именных {len(fx.named)} больше named_max {self.p.named_max} (spec 23b)")
         if self.p.raid_discipline_enabled and not self.p.knowledge_enabled:
             raise ValueError("raid_discipline_enabled требует knowledge_enabled (нужен мотив из 08c)")
         if self.p.war_steers_attacks and not self.p.wars_enabled:
@@ -866,7 +1054,11 @@ class World:
             self.recover(f)
         for f in fs:
             self.reorganize(f)
+        if self.p.multi_planet_enabled:
+            self.quiet_reg, self.quiet_fac = {}, {}
         for name in list(self.regions):
+            if self._quiet_region(name):
+                continue
             self.set_region(name, self.regions[name] + self.p.region_recovery, 1, "REGION_RECOVERY")
         # фаза 2 — приход и расход; пошлина беднит регион (TollDrag, 06)
         for f in fs:
@@ -878,7 +1070,14 @@ class World:
             for name in [n for n in f.workers if n not in {s.name for s, _, _ in plan}]:
                 self.rec(2, "06", f"{f.name}.workers.{name}", f.workers.pop(name), 0, "WORKERS")
             paying = [(s, inc) for s, _, inc in plan if not s.income_disabled]
-            income = sum(inc for _, inc in paying)
+            if self.p.multi_planet_enabled:
+                lazy = [(s, inc) for s, inc in paying if self._quiet_region(s.region)]
+                for s, inc in lazy:   # тихая планета: доход и пошлина копятся ставкой на пакетный пересчёт (spec 23c)
+                    pn = self.region_planet[s.region]
+                    self.quiet_reg[s.region] = self.quiet_reg.get(s.region, 0.0) + inc * self.p.toll_drag
+                    self.quiet_fac[(pn, f.name)] = self.quiet_fac.get((pn, f.name), 0.0) + inc
+                paying = [(s, inc) for s, inc in paying if not self._quiet_region(s.region)]
+            income = fsum(inc for _, inc in paying)
             for s, inc in paying:
                 self.set_region(s.region, self.regions[s.region] - inc * self.p.toll_drag, 2, "TOLL_DRAG")
             new = max(0.0, f.supply + income - self.expense(f))
@@ -893,7 +1092,7 @@ class World:
         if self.p.evolution_enabled:
             self.evolution_step()
         # фаза 7 — решения
-        if self.p.evolution_enabled and sum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
+        if self.p.evolution_enabled and fsum(1 for f in self.factions.values() if f.doctrine) > self.p.doctrine_max_factions:
             raise ValueError("доктрина != 0 разрешена не более чем одной фракции (док 07)")
         if self.p.strategy_enabled:
             if not (self.p.obj_enabled and self.p.npc_state_enabled):
@@ -920,6 +1119,9 @@ class World:
         # фаза 8 — война как состояние пары (spec 08b): читает 08a и 08c, пишет в чужие модули только цену (06)
         if self.p.wars_enabled:
             self.war_step()
+        # фаза 8 — планеты: переходы активная/тихая и пакетный пересчёт тихих (spec 23c)
+        if self.p.multi_planet_enabled:
+            self._planet_step()
         # фаза 8 — доли фракций в регионах (spec 13a): производная, ничего не меняет в других модулях
         if self.p.region_share_enabled:
             self._publish_shares()
@@ -983,7 +1185,7 @@ class World:
             why = "PAUSE"
         else:
             d = self.factions[s.owner]
-            weight = sum(x.yield_ for x in self.owned(d))
+            weight = fsum(x.yield_ for x in self.owned(d))
             stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
             if stock < p.raid_min_loot_share * p.strike_group_max * p.carry_unit:
                 why = "PLUNDERED"
@@ -994,6 +1196,7 @@ class World:
     def raid_object(self, a: Faction, s: Site, forced: bool):
         """Spec 03c: налёт на объект. Бой как в штурме, но объект не захватывается; выбывшие частью ранены;
         ёмкость и мораль группы решают, что несут; брошенные раненые попадают в плен по укладу обороны."""
+        self._touch_site(s)
         p = self.p
         d = self.factions[s.owner]
         if a.manpower == 0 or d is a:
@@ -1025,7 +1228,7 @@ class World:
         capacity = healthy * p.carry_unit
         w_cost = p.wounded_load * p.carry_unit
         morale_high = a.morale >= p.carry_morale_threshold
-        weight = sum(x.yield_ for x in self.owned(d))
+        weight = fsum(x.yield_ for x in self.owned(d))
         stock = d.supply * (s.yield_ / weight) if weight > 0 else 0.0
         loot, carried = 0.0, 0
         if attacker_wins:
@@ -1070,7 +1273,7 @@ class World:
     # ---------- 06: голод ----------
     def free_people(self, f: Faction) -> int:
         """Люди не на объектах: могут работать в каналах (spec 06)."""
-        caps = sum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
+        caps = fsum(self.p.crew_cap.get(s.name, s.min_crew) for s in self.staffed(f))
         return f.manpower - min(f.manpower, caps)
 
     def channels(self, f: Faction):
@@ -1100,7 +1303,7 @@ class World:
     def expected_income(self, f: Faction) -> float:
         """Ожидаемый приход в сутки: доход объектов с экипажем (03a) + налёт в среднем за кулдаун (06 S3)."""
         p = self.p
-        inc = sum(i for s, _, i in self.work_plan(f) if not s.income_disabled)
+        inc = fsum(i for s, _, i in self.work_plan(f) if not s.income_disabled)
         if p.raids_enabled and f.archetype in p.raiding_archetypes:
             inc += self.regions[f.home] * p.raid_yield * (1 - p.share_rate[f.archetype]) / p.raid_cooldown
         return inc
@@ -1192,7 +1395,7 @@ class World:
     def power(self, f: Faction) -> float:
         # spec 04: бойцы взвешены по ярусам (среднее по 70/20/10 равно 1.0); без ярусов — прежнее число бойцов
         if self.p.tiers_enabled:
-            n = sum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
+            n = fsum(wt * c for wt, c in zip(self.p.tier_power_weight, self.tier_fighters(f)))
         else:
             n = self.fighters(f)
         base = n * (0.5 + f.armory / 100) * (0.6 + 0.8 * f.steadfast(self.p) / 100)
@@ -1246,6 +1449,7 @@ class World:
 
     # ---------- 13: разрешение штурма ----------
     def assault(self, a: Faction, s: Site, forced: bool):
+        self._touch_site(s)
         p = self.p
         d = self.factions[s.owner]
         a.last_assault = self.tick
@@ -1477,7 +1681,7 @@ class World:
 
     # ---------- 08b: война как состояние пары ----------
     def _war_count(self, name: str) -> int:
-        return sum(1 for (a, b) in self.wars if name in (a, b))
+        return fsum(1 for (a, b) in self.wars if name in (a, b))
 
     def _war_goal(self, a: str, b: str):
         """Цель войны: объект b с наибольшим доходом среди подходящих (мотив a при war_needs_motive), при равенстве по имени."""
@@ -1775,9 +1979,9 @@ class World:
         if obj not in O.NAMES:
             raise ValueError(f"неизвестная цель {obj}")
         krs = p.obj_kr.get(obj, ())
-        if sum(1 for k in krs if O.duration_kr(k)) > p.obj_max_duration_kr:
+        if fsum(1 for k in krs if O.duration_kr(k)) > p.obj_max_duration_kr:
             raise ValueError(f"цель {obj}: KR с длительностью больше {p.obj_max_duration_kr} на фракцию (spec 16a)")
-        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        others = fsum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
         if O.is_active(f, obj) and others + 1 > p.obj_max_active and not p.obj_bug_no_cap:
             raise ValueError(f"активных целей не больше {p.obj_max_active} на мир (spec 16a)")
         f.obj_target, f.obj_rival = target, rival
@@ -1820,7 +2024,7 @@ class World:
         else:   # continue_ideal_else
             keep, new = (True, pred) if pred in (2, 5) else (False, rule[1])
         reason = "OBJ_CONTINUE" if keep else "OBJ_CHANGE"
-        others = sum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
+        others = fsum(1 for g in self.factions.values() if g is not f and O.is_active(g, g.objective))
         if O.is_active(f, new) and others + 1 > p.obj_max_active and not p.inh_bug_no_cap:
             keep, new, reason = False, 0, "CAP_ACTIVE_OBJ"
         if keep:
@@ -1829,8 +2033,8 @@ class World:
             f.obj_ctr = {}
             krs = p.obj_kr.get(pred, ())
             met = [(not O.duration_kr(kr)) and O.cond(self, f, kr) for kr in krs]
-            self.rec(6, "16", f"{f.name}.obj_stage", f.obj_stage, sum(met), reason)
-            f.obj_stage, f.obj_met, f.obj_stage_tick = sum(met), met, self.tick
+            self.rec(6, "16", f"{f.name}.obj_stage", f.obj_stage, fsum(met), reason)
+            f.obj_stage, f.obj_met, f.obj_stage_tick = fsum(met), met, self.tick
             self.events.append(dict(kind="objective_continued", tick=self.tick, faction=f.name, objective=pred))
         else:
             self._obj_reset(f, new, reason, 6)
@@ -1887,7 +2091,7 @@ class World:
                     met.append(new >= kr[-1])
                 else:
                     met.append(c)
-            stage = sum(met)
+            stage = fsum(met)
             prev = f.obj_met or [False] * len(met)
             if stage != f.obj_stage:
                 n = next(i for i, (a, b) in enumerate(zip(prev, met), 1) if a != b)
